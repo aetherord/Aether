@@ -17,10 +17,9 @@ export default function Home() {
 			<div className="relative z-10 max-w-7xl mx-auto px-6 w-full h-full flex flex-col">
 				{/* Navbar */}
 				<nav className="flex justify-between items-center py-6 border-b border-white/10">
-					{/* Logo */}
-					<div className="flex items-center gap-1 text-xl tracking-tight">
-						<span className="font-serif text-3xl italic font-bold text-white/90">A</span>
-						<span className="font-bold text-white">ether</span>
+					{/* Logo - JUST THE A */}
+					<div className="text-3xl font-serif italic font-bold text-white/90 tracking-tight">
+						A
 					</div>
 
 					<div className="hidden md:flex gap-8 text-sm font-medium">
