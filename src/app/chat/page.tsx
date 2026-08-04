@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useEffect, useState } from 'react';
 
 export default function Chat() {
@@ -10,7 +10,7 @@ export default function Chat() {
       window.location.href = '/login';
       return;
     }
-    fetch('https://aether.aetherord.workers.dev/api/auth/verify-token', {
+    fetch('https://aether.aetherord.workers.dev/api/auth/verify', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then((res) => res.json() as Promise<{ verified: boolean }>)

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState } from "react";
 
 export default function TwoFactorSetup() {
@@ -8,7 +8,7 @@ export default function TwoFactorSetup() {
   const [enabled, setEnabled] = useState(false);
 
   const enable2FA = async () => {
-    const res = await fetch("/api/auth/2fa", { method: "POST", body: JSON.stringify({ userId: 1 }) }); // replace with real user ID
+    const res = await fetch("https://aether.aetherord.workers.dev/api/auth/2fa", { method: "POST", body: JSON.stringify({ userId: 1 }) }); // replace with real user ID
     const data = (await res.json()) as { secret: string; qrUrl: string };
     setSecret(data.secret);
     setQrUrl(data.qrUrl);
@@ -59,3 +59,4 @@ export default function TwoFactorSetup() {
     </div>
   );
 }
+
