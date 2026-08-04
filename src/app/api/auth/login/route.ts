@@ -1,57 +1,55 @@
 import { NextResponse } from 'next/server';
-import { authenticator } from 'otplib';
-
-// Helper: pretend this returns a user from D1
-// Replace this with actual D1 fetch logic later
-async function getUserByUsername(username: string) {
-  // TODO: Query D1 for user by username
-  return null; // placeholder
-}
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 export async function POST(req: Request) {
   const { username, password, totpCode } = await req.json();
 
-  // 1. Fetch user from D1
-  const user = await getUserByUsername(username);
+  // Fetch user from D1 via Worker
+  const userRes = await fetch('https://aether.aetherord.workers.dev/api/db/users/get?username=' + username);
+  const user = await userRes.json();
+
   if (!user) {
     return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
   }
 
-  // 2. Check password (placeholder — add bcrypt compare here)
-  const passwordMatches = true; // replace with actual bcrypt check
-  if (!passwordMatches) {
+  // Check password
+  const passwordMatch = await bcrypt.compare(password, user.password_hash);
+  if (!passwordMatch) {
     return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
   }
 
-  // 3. Check if email is verified
+  // BLOCK if email is NOT verified
   if (!user.is_verified) {
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'Please verify your email before logging in.',
-      requiresVerification: true 
+      requiresVerification: true
     }, { status: 403 });
   }
 
-  // 4. Check if 2FA is enabled
+  // Check 2FA
   if (user.totp_secret) {
-    // If they didn't provide a totpCode, ask for it
     if (!totpCode) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         requires2FA: true,
         message: '2FA is enabled. Please provide your 6-digit code.'
       }, { status: 200 });
     }
-
-    // Verify the 6-digit code
+    // Verify 2FA code
     const isValid = authenticator.check(totpCode, user.totp_secret);
     if (!isValid) {
       return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 });
     }
   }
 
-  // 5. All checks passed — return success
-  return NextResponse.json({ 
-    success: true, 
-    message: 'Logged in successfully.',
+  // Generate JWT token
+  const token = jwt.sign({ userId: user.id, username: user.username }, process.env.JWT_SECRET!, {
+    expiresIn: '7d'
+  });
+
+  return NextResponse.json({
+    success: true,
+    token,
     user: { id: user.id, username: user.username }
   });
 }
