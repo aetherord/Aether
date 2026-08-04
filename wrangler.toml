@@ -1,0 +1,9 @@
+﻿name = "aether"
+main = ".open-next/worker.js"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aether-messages"
+database_id = "96ec05bf-50f6-4843-80c1-53f33b17bb2b"

@@ -2,7 +2,4 @@
 const nextConfig = {
   output: 'export',
 }
-
 module.exports = nextConfig
-
-// Auto-trigger rebuild
