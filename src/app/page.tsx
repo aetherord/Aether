@@ -23,10 +23,10 @@ export default function Home() {
 
           {/* Centered Nav Links */}
           <div className="hidden md:flex gap-8 text-sm font-medium absolute left-1/2 transform -translate-x-1/2">
-            <Link href="#" className="text-gray-400 hover:text-white transition-colors">
+            <Link href="/docs" className="text-gray-400 hover:text-white transition-colors">
               Features
             </Link>
-            <Link href="#" className="text-gray-400 hover:text-white transition-colors">
+            <Link href="/docs" className="text-gray-400 hover:text-white transition-colors">
               Docs
             </Link>
           </div>
@@ -67,7 +67,7 @@ export default function Home() {
               Get started
             </Link>
             <Link
-              href="#"
+              href="/docs"
               className="px-8 py-3 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
             >
               Documentation &rarr;
@@ -78,3 +78,4 @@ export default function Home() {
     </main>
   );
 }
+
