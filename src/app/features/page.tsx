@@ -39,9 +39,9 @@ export default function Features() {
             Messages arrive instantly, no matter where you are. Powered by Cloudflare's global network, Aether keeps you in sync with zero lag.
           </p>
           <ul className="mt-6 space-y-2 text-gray-300">
-            <li className="flex items-center gap-2">? Live typing indicators</li>
-            <li className="flex items-center gap-2">? Read receipts</li>
-            <li className="flex items-center gap-2">? Unlimited message history</li>
+            <li className="flex items-center gap-2">✓ Live typing indicators</li>
+            <li className="flex items-center gap-2">✓ Read receipts</li>
+            <li className="flex items-center gap-2">✓ Unlimited message history</li>
           </ul>
         </div>
 
@@ -52,9 +52,9 @@ export default function Features() {
             Drag and drop images, videos, or documents directly into any channel. Aether stores your media securely, giving you full control over access.
           </p>
           <ul className="mt-6 space-y-2 text-gray-300">
-            <li className="flex items-center gap-2">? Inline previews for images and videos</li>
-            <li className="flex items-center gap-2">? Organized file archives</li>
-            <li className="flex items-center gap-2">? Access-controlled storage</li>
+            <li className="flex items-center gap-2">✓ Inline previews for images and videos</li>
+            <li className="flex items-center gap-2">✓ Organized file archives</li>
+            <li className="flex items-center gap-2">✓ Access-controlled storage</li>
           </ul>
         </div>
 
@@ -62,12 +62,12 @@ export default function Features() {
         <div className="border-b border-white/5 pb-16">
           <h2 className="text-3xl font-serif mb-6">Servers and channels.</h2>
           <p className="text-gray-400 text-lg leading-relaxed max-w-3xl">
-            Create a server for your community, then organize conversations into channels. Public or private, text or voice � you decide.
+            Create a server for your community, then organize conversations into channels. Public or private, text or voice — you decide.
           </p>
           <ul className="mt-6 space-y-2 text-gray-300">
-            <li className="flex items-center gap-2">? Unlimited servers and channels</li>
-            <li className="flex items-center gap-2">? Role-based permissions</li>
-            <li className="flex items-center gap-2">? Invite links for easy access</li>
+            <li className="flex items-center gap-2">✓ Unlimited servers and channels</li>
+            <li className="flex items-center gap-2">✓ Role-based permissions</li>
+            <li className="flex items-center gap-2">✓ Invite links for easy access</li>
           </ul>
         </div>
 
@@ -78,9 +78,9 @@ export default function Features() {
             No tracking, no telemetry, no third-party data brokers. Aether is built with end-to-end encryption and zero data leakage.
           </p>
           <ul className="mt-6 space-y-2 text-gray-300">
-            <li className="flex items-center gap-2">? End-to-end encrypted DMs</li>
-            <li className="flex items-center gap-2">? Secure cloud infrastructure</li>
-            <li className="flex items-center gap-2">? Zero telemetry</li>
+            <li className="flex items-center gap-2">✓ End-to-end encrypted DMs</li>
+            <li className="flex items-center gap-2">✓ Secure cloud infrastructure</li>
+            <li className="flex items-center gap-2">✓ Zero telemetry</li>
           </ul>
         </div>
 
@@ -88,12 +88,12 @@ export default function Features() {
         <div className="border-b border-white/5 pb-16">
           <h2 className="text-3xl font-serif mb-6">Cross-platform.</h2>
           <p className="text-gray-400 text-lg leading-relaxed max-w-3xl">
-            Aether works on any device with a browser. Mobile, desktop, tablet � you're always connected.
+            Aether works on any device with a browser. Mobile, desktop, tablet — you're always connected.
           </p>
           <ul className="mt-6 space-y-2 text-gray-300">
-            <li className="flex items-center gap-2">? Responsive web design</li>
-            <li className="flex items-center gap-2">? Desktop and mobile ready</li>
-            <li className="flex items-center gap-2">? Native-like experience</li>
+            <li className="flex items-center gap-2">✓ Responsive web design</li>
+            <li className="flex items-center gap-2">✓ Desktop and mobile ready</li>
+            <li className="flex items-center gap-2">✓ Native-like experience</li>
           </ul>
         </div>
 
