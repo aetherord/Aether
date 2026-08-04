@@ -1,7 +1,7 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
-  const { email, username, verificationToken } = await req.json();
+  const { email, username, verificationToken } = await req.json() as { email: string; username: string; verificationToken: string };
 
   const verificationLink = `https://aetherord.pages.dev/verify-email?token=${verificationToken}`;
 
@@ -39,7 +39,7 @@ export async function POST(req: Request) {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json() as { message?: string };
       throw new Error(errorData.message || 'Email failed');
     }
 

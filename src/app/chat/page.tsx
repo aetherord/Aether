@@ -11,14 +11,16 @@ export default function Chat() {
       return;
     }
     fetch('https://aether.aetherord.workers.dev/api/auth/verify-token', {
-      headers: { 'Authorization': Bearer  }
-    }).then(res => res.json()).then(data => {
-      if (data.verified) {
-        setIsVerified(true);
-      } else {
-        window.location.href = '/login';
-      }
-    });
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then((res) => res.json() as Promise<{ verified: boolean }>)
+      .then((data) => {
+        if (data.verified) {
+          setIsVerified(true);
+        } else {
+          window.location.href = '/login';
+        }
+      });
   }, []);
 
   if (!isVerified) return <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">Checking access...</div>;
