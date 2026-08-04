@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import * as brevo from 'brevo';
+import * as brevo from '@brevo/brevo';
 
 export async function POST(req: Request) {
   const { email, username, verificationToken } = await req.json();
@@ -45,4 +45,5 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Email failed' }, { status: 500 });
   }
 }
+
 
