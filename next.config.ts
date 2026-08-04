@@ -1,5 +1,8 @@
-import type { NextConfig } from "next";
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: 'export',
+}
 
-const nextConfig: NextConfig = {};
+module.exports = nextConfig
 
-export default nextConfig;
+// Auto-trigger rebuild
