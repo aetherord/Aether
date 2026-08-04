@@ -17,13 +17,26 @@ export default function Home() {
 			<div className="relative z-10 max-w-7xl mx-auto px-6 w-full h-full flex flex-col">
 				{/* Navbar */}
 				<nav className="flex justify-between items-center py-6 border-b border-white/10">
-					<div className="text-xl font-bold tracking-tight">Aether</div>
-					<div className="hidden md:flex gap-8 text-sm font-medium">
-						<Link href="#" className="text-gray-400 hover:text-white transition-colors">Features</Link>
-						<Link href="#" className="text-gray-400 hover:text-white transition-colors">Docs</Link>
+					{/* Logo */}
+					<div className="flex items-center gap-1 text-xl tracking-tight">
+						<span className="font-serif text-3xl italic font-bold text-white/90">A</span>
+						<span className="font-bold text-white">ether</span>
 					</div>
+
+					<div className="hidden md:flex gap-8 text-sm font-medium">
+						<Link href="#" className="text-gray-400 hover:text-white transition-colors">
+							Features
+						</Link>
+						<Link href="#" className="text-gray-400 hover:text-white transition-colors">
+							Docs
+						</Link>
+					</div>
+
 					<div className="flex items-center gap-4">
-						<Link href="/login" className="text-sm text-gray-400 hover:text-white transition-colors">
+						<Link
+							href="/login"
+							className="text-sm text-gray-400 hover:text-white transition-colors"
+						>
 							Log in
 						</Link>
 						<Link
@@ -40,12 +53,15 @@ export default function Home() {
 					<div className="inline-block px-4 py-1.5 rounded-full border border-white/20 bg-white/10 text-xs font-medium text-gray-300">
 						Join the <span className="text-white">Aether</span> network →
 					</div>
+
 					<h1 className="font-serif text-6xl lg:text-8xl leading-[1.05] tracking-tight">
 						The future of <br /> community chat.
 					</h1>
+
 					<p className="text-lg text-gray-400 max-w-lg leading-relaxed font-light">
 						The best way to connect your people, without the noise. Designed for clarity, built for scale.
 					</p>
+
 					<div className="flex flex-wrap gap-4 mt-4">
 						<Link
 							href="/signup"
