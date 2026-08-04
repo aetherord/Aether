@@ -9,3 +9,4 @@ export async function POST(req: Request) {
     qrUrl: `otpauth://totp/Aether:${userId}?secret=${secret}&issuer=Aether`
   });
 }
+
