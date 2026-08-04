@@ -9,7 +9,7 @@ export default function TwoFactorSetup() {
 
   const enable2FA = async () => {
     const res = await fetch("/api/auth/2fa", { method: "POST", body: JSON.stringify({ userId: 1 }) }); // replace with real user ID
-    const data = await res.json();
+    const data = (await res.json()) as { secret: string; qrUrl: string };
     setSecret(data.secret);
     setQrUrl(data.qrUrl);
   };
