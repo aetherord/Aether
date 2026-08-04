@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import otplib from 'otplib';
 
 export async function POST(req: Request) {
   const body = await req.json() as { username: string; password: string; totpCode?: string };
@@ -8,7 +9,13 @@ export async function POST(req: Request) {
 
   // Fetch user from D1 via Worker
   const userRes = await fetch('https://aether.aetherord.workers.dev/api/db/users/get?username=' + username);
-  const user = await userRes.json();
+  const user = await userRes.json() as {
+    id: number;
+    username: string;
+    password_hash: string;
+    is_verified: number;
+    totp_secret: string | null;
+  } | null;
 
   if (!user) {
     return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
@@ -33,7 +40,7 @@ export async function POST(req: Request) {
         message: '2FA is enabled. Please provide your 6-digit code.'
       }, { status: 200 });
     }
-    const isValid = authenticator.check(totpCode, user.totp_secret);
+    const isValid = otplib.authenticator.check(totpCode, user.totp_secret);
     if (!isValid) {
       return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 });
     }
