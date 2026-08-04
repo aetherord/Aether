@@ -6,6 +6,6 @@ export async function POST(req: Request) {
   const secret = authenticator.generateSecret();
   return NextResponse.json({
     secret,
-    qrUrl: otpauth://totp/Aether:\?secret=\&issuer=Aether
+    qrUrl: 'otpauth://totp/Aether:' + userId + '?secret=' + secret + '&issuer=Aether'
   });
 }
