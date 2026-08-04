@@ -1,52 +1,67 @@
-import Image from "next/image";
+import Link from "next/link";
 
 export default function Home() {
 	return (
-		<div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-			<main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-				<Image className="dark:invert" src="/next.svg" alt="Next.js logo" width={180} height={38} priority />
-				<ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-					<li className="mb-2 tracking-[-.01em]">
-						Get started by editing{" "}
-						<code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-							src/app/page.tsx
-						</code>
-						.
-					</li>
-					<li className="tracking-[-.01em]">Save and see your changes instantly.</li>
-				</ol>
+		<main className="min-h-screen bg-[#0a0a0a] text-white relative overflow-hidden">
+			{/* Radial glow */}
+			<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-white/5 to-transparent pointer-events-none" />
 
-				<div className="flex gap-4 items-center flex-col sm:flex-row">
-					<a
-						className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-						href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						Read our docs
-					</a>
-				</div>
-			</main>
-			<footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-				<a
-					className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-					href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-					target="_blank"
-					rel="noopener noreferrer"
-				>
-					<Image aria-hidden src="/file.svg" alt="File icon" width={16} height={16} />
-					Learn
-				</a>
-				<a
-					className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-					href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-					target="_blank"
-					rel="noopener noreferrer"
-				>
-					<Image aria-hidden src="/globe.svg" alt="Globe icon" width={16} height={16} />
-					Go to nextjs.org →
-				</a>
-			</footer>
-		</div>
+			<div className="max-w-7xl mx-auto px-6 relative z-10">
+				{/* Navbar */}
+				<nav className="flex justify-between items-center py-6 border-b border-white/5">
+					<div className="text-xl font-bold tracking-tight">Aether</div>
+					<div className="hidden md:flex gap-8 text-sm text-gray-400">
+						<Link href="#" className="hover:text-white transition">Features</Link>
+						<Link href="#" className="hover:text-white transition">Pricing</Link>
+						<Link href="#" className="hover:text-white transition">Docs</Link>
+					</div>
+					<div className="flex items-center gap-4">
+						<Link href="/login" className="text-sm text-gray-400 hover:text-white transition">
+							Log in
+						</Link>
+						<Link
+							href="/signup"
+							className="px-4 py-2 text-sm rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition"
+						>
+							Get started
+						</Link>
+					</div>
+				</nav>
+
+				{/* Hero */}
+				<section className="flex flex-col lg:flex-row items-center gap-12 py-24 lg:py-32">
+					<div className="flex-1 max-w-xl">
+						<div className="inline-block px-4 py-1.5 rounded-full border border-white/10 bg-white/5 text-xs text-gray-300 mb-8">
+							Join the <span className="text-white">Aether</span> network →
+						</div>
+						<h1 className="font-serif text-5xl lg:text-7xl leading-[1.05] tracking-tight bg-gradient-to-br from-white via-white to-gray-500 bg-clip-text text-transparent">
+							The future of community chat.
+						</h1>
+						<p className="mt-6 text-lg text-gray-400 max-w-md leading-relaxed">
+							The best way to connect your people, without the noise. Designed for clarity, built for scale.
+						</p>
+						<div className="mt-8 flex flex-wrap gap-4">
+							<Link
+								href="/signup"
+								className="px-6 py-3 rounded-full bg-[#1a1a1a] border border-white/10 hover:bg-[#2a2a2a] hover:border-white/20 transition"
+							>
+								Get started
+							</Link>
+							<Link
+								href="#"
+								className="px-6 py-3 text-gray-400 hover:text-white transition flex items-center gap-1"
+							>
+								Documentation &rarr;
+							</Link>
+						</div>
+					</div>
+
+					{/* CSS 3D Object */}
+					<div className="flex-1 flex justify-center lg:justify-end">
+						<div className="w-72 h-72 lg:w-96 lg:h-96 bg-gradient-to-br from-[#2a2a2a] to-[#0a0a0a] rounded-[3rem] shadow-[0_0_60px_rgba(255,255,255,0.03),inset_0_0_60px_rgba(255,255,255,0.02)] rotate-x-12 relative" />
+					</div>
+				</section>
+			</div>
+		</main>
 	);
 }
