@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import * as brevo from 'brevo';
+import * as brevo from 'sib-api-v3-sdk';
 
 export async function POST(req: Request) {
   const { email, username, verificationToken } = await req.json();
