@@ -1,5 +1,5 @@
 import { getSecret } from "./env";
-import { EMAIL_NOT_CONFIGURED_MESSAGE } from "./http";
+import { EMAIL_NOT_CONFIGURED_MESSAGE, HttpError } from "./http";
 
 /**
  * Sends the verification code by email. The code is never logged and never
@@ -8,7 +8,7 @@ import { EMAIL_NOT_CONFIGURED_MESSAGE } from "./http";
 export async function sendVerificationCodeEmail(email: string, code: string): Promise<void> {
   const apiKey = getSecret("BREVO_API_KEY");
   if (!apiKey) {
-    throw new Error(EMAIL_NOT_CONFIGURED_MESSAGE);
+    throw new HttpError(503, EMAIL_NOT_CONFIGURED_MESSAGE);
   }
 
   const senderEmail = getSecret("BREVO_SENDER_EMAIL") ?? "aether.verify@outlook.com";
@@ -32,8 +32,39 @@ export async function sendVerificationCodeEmail(email: string, code: string): Pr
   });
 
   if (!res.ok) {
-    throw new Error("Email delivery failed");
+    throw new HttpError(502, await brevoErrorMessage(res));
   }
+}
+
+/** Turns a Brevo rejection into an actionable message for the user. */
+async function brevoErrorMessage(res: Response): Promise<string> {
+  let message = "";
+  try {
+    const data = (await res.json()) as { message?: string; code?: string };
+    message = data.message ?? "";
+  } catch {
+    /* body not JSON */
+  }
+
+  const lower = message.toLowerCase();
+  if (res.status === 401 || res.status === 403 || lower.includes("ip")) {
+    return (
+      "Brevo blocked this request (IP restriction). Open " +
+      "https://app.brevo.com/security/authorised_ips and add your IP, or disable the " +
+      "restriction — your Cloudflare Worker sends from many IPs."
+    );
+  }
+  if (lower.includes("sender") || lower.includes("verify") || lower.includes("domain")) {
+    return (
+      "Brevo rejected the sender address. Verify BREVO_SENDER_EMAIL in your Brevo " +
+      "dashboard under Senders & IPs."
+    );
+  }
+  if (res.status === 429) {
+    return "Brevo rate limit reached — try again in a minute.";
+  }
+  if (message) return `Brevo error: ${message.slice(0, 200)}`;
+  return "Email delivery failed";
 }
 
 function buildCodeEmailHtml(code: string): string {
