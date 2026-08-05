@@ -1,4 +1,0 @@
-# Aether moved from Cloudflare Pages to a Worker deployment.
-# This Pages project only exists to redirect the old URL so bookmarks and
-# links never hit a 404. The real app lives at aether.aetherord.workers.dev.
-/* https://aether.aetherord.workers.dev/:splat 302

@@ -3,6 +3,15 @@ main = ".open-next/worker.js"
 compatibility_date = "2026-08-04"
 compatibility_flags = ["nodejs_compat"]
 
+# Serve Next.js static assets (CSS/JS/images) from the OpenNext build output.
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[[services]]
+binding = "WORKER_SELF_REFERENCE"
+service = "aether"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "aether-messages"
