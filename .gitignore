@@ -24,6 +24,10 @@
 .DS_Store
 *.pem
 
+# local tooling state
+.freebuff/
+.aider.*
+
 # debug
 npm-debug.log*
 yarn-debug.log*
@@ -33,6 +37,10 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
+
+# local app state / tooling history (never commit)
+.freebuff/
+.aider.*
 
 # vercel
 .vercel

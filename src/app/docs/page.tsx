@@ -5,7 +5,7 @@ export default function Docs() {
     <div className="min-h-screen bg-[#0a0a0a] text-white font-sans">
       <nav className="sticky top-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-between items-center max-w-7xl mx-auto">
         <Link href="/" className="text-3xl font-serif italic font-bold text-white/90 tracking-tight">A</Link>
-        <div className="hidden md:flex gap-8 text-sm font-medium">
+        <div className="hidden md:flex gap-8 text-sm font-medium absolute left-1/2 transform -translate-x-1/2">
           <Link href="/features" className="text-gray-400 hover:text-white transition-colors">Features</Link>
           <Link href="/docs" className="text-white border-b-2 border-white/50 pb-1">Docs</Link>
         </div>

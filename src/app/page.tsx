@@ -1,4 +1,5 @@
 import Link from "next/link";
+import AuthNav from "@/components/AuthNav";
 
 export default function Home() {
   return (
@@ -23,7 +24,7 @@ export default function Home() {
 
           {/* Centered Nav Links */}
           <div className="hidden md:flex gap-8 text-sm font-medium absolute left-1/2 transform -translate-x-1/2">
-            <Link href="/docs" className="text-gray-400 hover:text-white transition-colors">
+            <Link href="/features" className="text-gray-400 hover:text-white transition-colors">
               Features
             </Link>
             <Link href="/docs" className="text-gray-400 hover:text-white transition-colors">
@@ -32,17 +33,7 @@ export default function Home() {
           </div>
 
           {/* Right Side Actions */}
-          <div className="flex items-center gap-4">
-            <Link href="/login" className="text-sm text-gray-400 hover:text-white transition-colors">
-              Log in
-            </Link>
-            <Link
-              href="/signup"
-              className="px-4 py-2 text-sm rounded-full bg-white text-black font-medium border border-transparent hover:bg-transparent hover:text-white hover:border-white/50 transition-all duration-300"
-            >
-              Get started
-            </Link>
-          </div>
+          <AuthNav />
         </nav>
 
         {/* Hero Section */}
@@ -74,6 +65,27 @@ export default function Home() {
             </Link>
           </div>
         </section>
+
+        {/* Footer */}
+        <footer className="border-t border-white/10 py-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-xl font-serif italic font-bold text-white/80">A</span>
+              <span className="text-sm text-gray-500">Aether — the future of community chat.</span>
+            </div>
+            <div className="flex gap-6 text-sm">
+              <Link href="/terms" className="text-gray-400 hover:text-white transition-colors">
+                Terms of Service
+              </Link>
+              <Link href="/privacy" className="text-gray-400 hover:text-white transition-colors">
+                Privacy Policy
+              </Link>
+              <Link href="/rules" className="text-gray-400 hover:text-white transition-colors">
+                Rules
+              </Link>
+            </div>
+          </div>
+        </footer>
       </div>
     </main>
   );
