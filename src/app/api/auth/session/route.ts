@@ -36,8 +36,9 @@ export async function GET(req: Request) {
 
     const res = json({
       authenticated: true,
-      user: { id: user.id, email: user.email, username: user.username },
+      user: { id: user.id, email: user.email, username: user.username, role: user.role },
       twoFactorEnabled: user.totpEnabled,
+      mutedUntil: user.mutedUntil,
     });
 
     if (Date.now() - row.createdAt > SESSION_ROTATE_MS) {

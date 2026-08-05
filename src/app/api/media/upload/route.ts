@@ -81,7 +81,6 @@ export async function POST(req: Request) {
     if (file.size === 0) return jsonError("File is empty", 400);
 
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const b64 = Buffer.from(bytes).toString("base64");
 
     await ensureMediaSchema();
     const mediaRef = await enqueueMedia({
@@ -89,7 +88,7 @@ export async function POST(req: Request) {
       recipientUsername: recipient,
       filename: sanitizeFilename(file.name),
       mime,
-      b64,
+      bytes,
     });
 
     return jsonOk({ mediaRef, mime });

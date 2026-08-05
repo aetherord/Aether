@@ -1,26 +1,38 @@
 import { resolveSession } from "@/lib/auth";
 import { handleApiError, jsonError } from "@/lib/http";
-import { getStore } from "@/lib/store";
+import { getStore, type ChatRoom } from "@/lib/store";
 
-const POLL_MS = 2000;
-const KEEPALIVE_MS = 15000;
+const POLL_MS = 3000;
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 /**
- * GET /api/chat/stream — Server-Sent Events feed (session required).
+ * GET /api/chat/stream?room=community|dm&peer=... — Server-Sent Events feed
+ * (session required).
  *
- * Pushes new chat messages to the client the moment they exist, with a
- * periodic keepalive so proxies don't close the connection. If the
- * connection drops (network, Cloudflare idle), the client's EventSource
- * reconnects automatically and the initial catch-up replays the tail.
+ * Pushes new messages for the requested room the moment they exist. Each poll
+ * only fetches messages newer than the last delivered id (WHERE id > ?) rather
+ * than re-reading the whole tail, which keeps D1 reads low per connection.
+ * If the connection drops, EventSource reconnects and catches up from the
+ * client's last id via the initial poll.
  */
 export async function GET(req: Request) {
   try {
     const session = await resolveSession(req);
     if (!session) return jsonError("Not authenticated", 401);
 
+    const url = new URL(req.url);
+    let room: ChatRoom = { kind: "community" };
+    if (url.searchParams.get("room") === "dm") {
+      const peer = (url.searchParams.get("peer") ?? "").trim();
+      if (USERNAME_RE.test(peer) && peer !== session.user.username) {
+        room = { kind: "dm", me: session.user.username, peer };
+      }
+    }
+
     const store = await getStore();
     const encoder = new TextEncoder();
     let lastId = 0;
+    const blocked = new Set(await store.getBlockedIds(session.user.id));
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -31,11 +43,12 @@ export async function GET(req: Request) {
 
         const poll = async () => {
           try {
-            const messages = await store.listMessages(100);
+            const messages = await store.listMessagesAfter(lastId, room, 100);
             for (const m of messages) {
               if (m.id <= lastId) continue;
-              send(`data: ${JSON.stringify(m)}\n\n`);
               lastId = m.id;
+              if (blocked.has(m.senderId)) continue; // respect the block list
+              send(`data: ${JSON.stringify(m)}\n\n`);
             }
           } catch {
             // transient error — keep the connection alive for the next poll

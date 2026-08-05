@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveSession } from "@/lib/auth";
 import { handleApiError, jsonError } from "@/lib/http";
-import { getMedia } from "@/lib/media";
+import { decryptMediaPayload, getMedia } from "@/lib/media";
 
 /**
  * GET /api/media/[id] — serves an uploaded image (session required).
@@ -18,7 +18,7 @@ export async function GET(
     const rec = await getMedia(id);
     if (!rec) return jsonError("Media not found", 404);
 
-    const bytes = Buffer.from(rec.b64, "base64");
+    const bytes = Buffer.from(await decryptMediaPayload(rec.b64));
     return new NextResponse(bytes, {
       status: 200,
       headers: {

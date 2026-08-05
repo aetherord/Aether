@@ -29,6 +29,7 @@
 
 import { access, mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, basename, sep } from "node:path";
 
 const ROOT = process.env.MEDIA_ROOT || "D:\\Aether-Images-and-media";
@@ -38,10 +39,45 @@ const MAX_BYTES = MAX_GB * 1024 * 1024 * 1024;
 
 const TURSO_URL = process.env.TURSO_URL;
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN;
+const MEDIA_SECRET = process.env.JWT_SECRET;
 
 if (!TURSO_URL || !TURSO_TOKEN) {
   console.error("ERROR: TURSO_URL and TURSO_AUTH_TOKEN are required.");
   process.exit(1);
+}
+if (!MEDIA_SECRET) {
+  console.error(
+    "ERROR: JWT_SECRET is required — media is encrypted at rest in Turso and " +
+      "must be decrypted with the same key before writing to the D: drive."
+  );
+  process.exit(1);
+}
+
+/* ── at-rest decryption (mirrors src/lib/media.ts) ───────────────────────── */
+
+const MEDIA_ENC_PREFIX = "encv1:";
+let mediaKey = null;
+
+async function getMediaKey() {
+  if (mediaKey) return mediaKey;
+  const raw = Uint8Array.from(Buffer.from(createHash("sha256").update(`aether-media:${MEDIA_SECRET}`).digest("hex"), "hex"));
+  mediaKey = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["decrypt"]);
+  return mediaKey;
+}
+
+/** Decrypts an `encv1:` payload; legacy plain-base64 records pass through. */
+async function decryptPayload(payload) {
+  if (!payload.startsWith(MEDIA_ENC_PREFIX)) {
+    return Buffer.from(payload, "base64");
+  }
+  const body = payload.slice(MEDIA_ENC_PREFIX.length);
+  const dot = body.indexOf(".");
+  if (dot === -1) throw new Error("Malformed encrypted media payload");
+  const key = await getMediaKey();
+  const iv = Buffer.from(body.slice(0, dot), "base64");
+  const ciphertext = Buffer.from(body.slice(dot + 1), "base64");
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  return Buffer.from(plain);
 }
 
 /* ── SSD availability check ──────────────────────────────────────────────── */
@@ -206,7 +242,8 @@ async function main() {
 
     try {
       await mkdir(dir, { recursive: true });
-      await writeFile(filePath, Buffer.from(item.b64, "base64"));
+      const plain = await decryptPayload(item.b64); // encrypted at rest in Turso
+      await writeFile(filePath, plain);
       used += sizeBytes;
       synced++;
 

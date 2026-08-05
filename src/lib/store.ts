@@ -13,8 +13,25 @@ export interface UserRow {
   verified: boolean;
   totpSecret: string | null;
   totpEnabled: boolean;
+  role: "user" | "admin";
+  mutedUntil: number | null;
   createdAt: number;
 }
+
+export interface ConversationRow {
+  peer: string;
+  messageId: number;
+  content: string;
+  mediaRef: string | null;
+  mediaMime: string | null;
+  lastAt: number;
+  lastSender: string;
+}
+
+/** A chat room: the public community room or a 1:1 direct message thread. */
+export type ChatRoom =
+  | { kind: "community" }
+  | { kind: "dm"; me: string; peer: string };
 
 export interface CodeRow {
   email: string;
@@ -111,8 +128,19 @@ export interface AuthStore {
   createPending(row: PendingRow): Promise<void>;
   getPending(tokenHash: string): Promise<PendingRow | null>;
   deletePending(tokenHash: string): Promise<void>;
-  listMessages(limit: number): Promise<MessageRow[]>;
+  listMessages(room: ChatRoom, beforeId: number | null, limit: number): Promise<MessageRow[]>;
+  listMessagesAfter(lastId: number, room: ChatRoom, limit: number): Promise<MessageRow[]>;
+  listConversations(username: string): Promise<ConversationRow[]>;
+  searchMessages(room: ChatRoom, query: string, limit: number): Promise<MessageRow[]>;
   addMessage(input: Omit<MessageRow, "id">): Promise<MessageRow>;
+  addReport(messageId: number, reporterId: number, reason: string): Promise<void>;
+  addBlock(blockerId: number, blockedId: number): Promise<void>;
+  removeBlock(blockerId: number, blockedId: number): Promise<void>;
+  getBlockedIds(userId: number): Promise<number[]>;
+  isBlocked(blockerId: number, blockedId: number): Promise<boolean>;
+  deleteMessage(id: number): Promise<void>;
+  setRole(userId: number, role: "user" | "admin"): Promise<void>;
+  setMutedUntil(userId: number, until: number | null): Promise<void>;
   consumeRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult>;
 }
 
@@ -141,6 +169,8 @@ CREATE TABLE IF NOT EXISTS users (
   verified INTEGER NOT NULL DEFAULT 0,
   totp_secret TEXT,
   totp_enabled INTEGER NOT NULL DEFAULT 0,
+  role TEXT NOT NULL DEFAULT 'user',
+  muted_until INTEGER,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -183,6 +213,25 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_username, created_at);
+
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker_id INTEGER NOT NULL,
+  blocked_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id);
+
+CREATE TABLE IF NOT EXISTS reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL,
+  reporter_id INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
 
 CREATE TABLE IF NOT EXISTS rate_limits (
   key TEXT PRIMARY KEY,
@@ -192,7 +241,7 @@ CREATE TABLE IF NOT EXISTS rate_limits (
 `;
 
 const USER_COLUMNS =
-  "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, created_at";
+  "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, role, muted_until, created_at";
 
 const MESSAGE_COLUMNS =
   "id, sender_id, sender_username, recipient_username, content, media_ref, media_mime, created_at";
@@ -207,6 +256,8 @@ const USER_MIGRATIONS: Record<string, string> = {
   agreed_rules: "INTEGER NOT NULL DEFAULT 0",
   verified: "INTEGER NOT NULL DEFAULT 0",
   totp_enabled: "INTEGER NOT NULL DEFAULT 0",
+  role: "TEXT NOT NULL DEFAULT 'user'",
+  muted_until: "INTEGER",
 };
 
 const MESSAGE_MIGRATIONS: Record<string, string> = {
@@ -279,6 +330,8 @@ class D1AuthStore implements AuthStore {
       verified: Number(row.verified) === 1,
       totpSecret: row.totp_secret == null ? null : String(row.totp_secret),
       totpEnabled: Number(row.totp_enabled) === 1,
+      role: row.role === "admin" ? "admin" : "user",
+      mutedUntil: row.muted_until == null ? null : Number(row.muted_until),
       createdAt: Number(row.created_at),
     };
   }
@@ -493,12 +546,140 @@ class D1AuthStore implements AuthStore {
     await this.db.prepare("DELETE FROM pending_2fa WHERE token_hash = ?1").bind(tokenHash).run();
   }
 
-  async listMessages(limit: number): Promise<MessageRow[]> {
+  /** Builds the room WHERE clause with positional placeholders starting at ?1. */
+  private static roomWhere(room: ChatRoom): { clause: string; argCount: number } {
+    if (room.kind === "community") {
+      return { clause: "recipient_username IS NULL", argCount: 0 };
+    }
+    return {
+      clause: "((sender_username = ?1 AND recipient_username = ?2) OR (sender_username = ?2 AND recipient_username = ?1))",
+      argCount: 2,
+    };
+  }
+
+  async listMessages(room: ChatRoom, beforeId: number | null, limit: number): Promise<MessageRow[]> {
+    const { clause, argCount } = D1AuthStore.roomWhere(room);
+    const n = argCount; // first free positional index
+    const before = beforeId ? `AND id < ?${n + 1}` : "";
     const res = await this.db
-      .prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages ORDER BY id DESC LIMIT ?1`)
-      .bind(limit)
+      .prepare(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${clause} ${before} ORDER BY id DESC LIMIT ?${n + (beforeId ? 2 : 1)}`
+      )
+      .bind(...(room.kind === "dm" ? [room.me, room.peer] : []), ...(beforeId ? [beforeId] : []), limit)
       .all();
     return (res.results as Record<string, unknown>[]).reverse().map(D1AuthStore.toMessage);
+  }
+
+  async listMessagesAfter(lastId: number, room: ChatRoom, limit: number): Promise<MessageRow[]> {
+    const { clause, argCount } = D1AuthStore.roomWhere(room);
+    const n = argCount;
+    const res = await this.db
+      .prepare(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${clause} AND id > ?${n + 1} ORDER BY id ASC LIMIT ?${n + 2}`
+      )
+      .bind(...(room.kind === "dm" ? [room.me, room.peer] : []), lastId, limit)
+      .all();
+    return (res.results as Record<string, unknown>[]).map(D1AuthStore.toMessage);
+  }
+
+  async listConversations(username: string): Promise<ConversationRow[]> {
+    // Latest message for every distinct peer who has exchanged DMs with this user.
+    const res = await this.db
+      .prepare(
+        `SELECT m.* FROM messages m
+         JOIN (
+           SELECT MAX(id) AS mid FROM messages
+           WHERE recipient_username IS NOT NULL
+             AND (sender_username = ?1 OR recipient_username = ?1)
+           GROUP BY
+             CASE WHEN sender_username < recipient_username
+               THEN sender_username || '|' || recipient_username
+               ELSE recipient_username || '|' || sender_username END
+         ) latest ON latest.mid = m.id
+         ORDER BY m.id DESC LIMIT 50`
+      )
+      .bind(username)
+      .all();
+    const rows = res.results as Record<string, unknown>[];
+    return rows.map((row) => {
+      const sender = String(row.sender_username);
+      const recipient = String(row.recipient_username ?? "");
+      return {
+        peer: sender === username ? recipient : sender,
+        messageId: Number(row.id),
+        content: String(row.content),
+        mediaRef: row.media_ref == null ? null : String(row.media_ref),
+        mediaMime: row.media_mime == null ? null : String(row.media_mime),
+        lastAt: Number(row.created_at),
+        lastSender: sender,
+      };
+    });
+  }
+
+  async searchMessages(room: ChatRoom, query: string, limit: number): Promise<MessageRow[]> {
+    const escaped = query.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+    const { clause, argCount } = D1AuthStore.roomWhere(room);
+    const n = argCount;
+    const res = await this.db
+      .prepare(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages
+         WHERE ${clause} AND content LIKE ?${n + 1} ESCAPE '\\'
+         ORDER BY id DESC LIMIT ?${n + 2}`
+      )
+      .bind(...(room.kind === "dm" ? [room.me, room.peer] : []), `%${escaped}%`, limit)
+      .all();
+    return (res.results as Record<string, unknown>[]).reverse().map(D1AuthStore.toMessage);
+  }
+
+  async addReport(messageId: number, reporterId: number, reason: string): Promise<void> {
+    await this.db
+      .prepare(
+        "INSERT INTO reports (message_id, reporter_id, reason, status, created_at) VALUES (?1, ?2, ?3, 'open', ?4)"
+      )
+      .bind(messageId, reporterId, reason, Date.now())
+      .run();
+  }
+
+  async addBlock(blockerId: number, blockedId: number): Promise<void> {
+    await this.db
+      .prepare("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at) VALUES (?1, ?2, ?3)")
+      .bind(blockerId, blockedId, Date.now())
+      .run();
+  }
+
+  async removeBlock(blockerId: number, blockedId: number): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM blocks WHERE blocker_id = ?1 AND blocked_id = ?2")
+      .bind(blockerId, blockedId)
+      .run();
+  }
+
+  async getBlockedIds(userId: number): Promise<number[]> {
+    const res = await this.db
+      .prepare("SELECT blocked_id FROM blocks WHERE blocker_id = ?1")
+      .bind(userId)
+      .all();
+    return (res.results as Record<string, unknown>[]).map((r) => Number(r.blocked_id));
+  }
+
+  async isBlocked(blockerId: number, blockedId: number): Promise<boolean> {
+    const row = await this.db
+      .prepare("SELECT 1 FROM blocks WHERE blocker_id = ?1 AND blocked_id = ?2 LIMIT 1")
+      .bind(blockerId, blockedId)
+      .first();
+    return Boolean(row);
+  }
+
+  async deleteMessage(id: number): Promise<void> {
+    await this.db.prepare("DELETE FROM messages WHERE id = ?1").bind(id).run();
+  }
+
+  async setRole(userId: number, role: "user" | "admin"): Promise<void> {
+    await this.db.prepare("UPDATE users SET role = ?1 WHERE id = ?2").bind(role, userId).run();
+  }
+
+  async setMutedUntil(userId: number, until: number | null): Promise<void> {
+    await this.db.prepare("UPDATE users SET muted_until = ?1 WHERE id = ?2").bind(until, userId).run();
   }
 
   async addMessage(input: Omit<MessageRow, "id">): Promise<MessageRow> {
@@ -556,6 +737,9 @@ class MemoryAuthStore implements AuthStore {
   private pendings = new Map<string, PendingRow>();
   private messages: MessageRow[] = [];
   private nextMessageId = 1;
+  private blocks = new Set<string>(); // "blockerId:blockedId"
+  private reports: { id: number; messageId: number; reporterId: number; reason: string; createdAt: number }[] = [];
+  private nextReportId = 1;
   private rateLimits = new Map<string, { count: number; windowStart: number }>();
 
   async ensureSchema(): Promise<void> {
@@ -605,6 +789,8 @@ class MemoryAuthStore implements AuthStore {
       verified: false,
       totpSecret: null,
       totpEnabled: false,
+      role: "user",
+      mutedUntil: null,
       createdAt: Date.now(),
     };
     this.usersByEmail.set(user.email, user);
@@ -687,8 +873,97 @@ class MemoryAuthStore implements AuthStore {
     this.pendings.delete(tokenHash);
   }
 
-  async listMessages(limit: number): Promise<MessageRow[]> {
-    return this.messages.slice(-limit);
+  private static inRoom(m: MessageRow, room: ChatRoom): boolean {
+    if (room.kind === "community") return m.recipientUsername == null;
+    return (
+      (m.senderUsername === room.me && m.recipientUsername === room.peer) ||
+      (m.senderUsername === room.peer && m.recipientUsername === room.me)
+    );
+  }
+
+  async listMessages(room: ChatRoom, beforeId: number | null, limit: number): Promise<MessageRow[]> {
+    const filtered = this.messages.filter(
+      (m) => MemoryAuthStore.inRoom(m, room) && (beforeId == null || m.id < beforeId)
+    );
+    return filtered.slice(-limit);
+  }
+
+  async listMessagesAfter(lastId: number, room: ChatRoom, limit: number): Promise<MessageRow[]> {
+    return this.messages
+      .filter((m) => MemoryAuthStore.inRoom(m, room) && m.id > lastId)
+      .slice(0, limit);
+  }
+
+  async listConversations(username: string): Promise<ConversationRow[]> {
+    const byPeer = new Map<string, MessageRow>();
+    for (const m of this.messages) {
+      if (!m.recipientUsername) continue;
+      if (m.senderUsername !== username && m.recipientUsername !== username) continue;
+      const peer = m.senderUsername === username ? m.recipientUsername : m.senderUsername;
+      const existing = byPeer.get(peer);
+      if (!existing || m.id > existing.id) byPeer.set(peer, m);
+    }
+    return [...byPeer.entries()]
+      .sort((a, b) => b[1].id - a[1].id)
+      .slice(0, 50)
+      .map(([peer, m]) => ({
+        peer,
+        messageId: m.id,
+        content: m.content,
+        mediaRef: m.mediaRef,
+        mediaMime: m.mediaMime,
+        lastAt: m.createdAt,
+        lastSender: m.senderUsername,
+      }));
+  }
+
+  async searchMessages(room: ChatRoom, query: string, limit: number): Promise<MessageRow[]> {
+    const q = query.toLowerCase();
+    return this.messages
+      .filter((m) => MemoryAuthStore.inRoom(m, room) && m.content.toLowerCase().includes(q))
+      .slice(-limit);
+  }
+
+  async addReport(messageId: number, reporterId: number, reason: string): Promise<void> {
+    this.reports.push({
+      id: this.nextReportId++,
+      messageId,
+      reporterId,
+      reason,
+      createdAt: Date.now(),
+    });
+  }
+
+  async addBlock(blockerId: number, blockedId: number): Promise<void> {
+    this.blocks.add(`${blockerId}:${blockedId}`);
+  }
+
+  async removeBlock(blockerId: number, blockedId: number): Promise<void> {
+    this.blocks.delete(`${blockerId}:${blockedId}`);
+  }
+
+  async getBlockedIds(userId: number): Promise<number[]> {
+    return [...this.blocks]
+      .filter((k) => k.startsWith(`${userId}:`))
+      .map((k) => Number(k.split(":")[1]));
+  }
+
+  async isBlocked(blockerId: number, blockedId: number): Promise<boolean> {
+    return this.blocks.has(`${blockerId}:${blockedId}`);
+  }
+
+  async deleteMessage(id: number): Promise<void> {
+    this.messages = this.messages.filter((m) => m.id !== id);
+  }
+
+  async setRole(userId: number, role: "user" | "admin"): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) user.role = role;
+  }
+
+  async setMutedUntil(userId: number, until: number | null): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) user.mutedUntil = until;
   }
 
   async addMessage(input: Omit<MessageRow, "id">): Promise<MessageRow> {

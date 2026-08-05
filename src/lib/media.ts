@@ -1,5 +1,5 @@
 import { getSecret } from "./env";
-import { generateToken } from "./crypto";
+import { generateToken, sha256Hex } from "./crypto";
 
 /**
  * Media pipeline: uploaded images/videos land in a Turso queue and are
@@ -127,6 +127,67 @@ async function tursoSelect(
   return (first.response?.result?.rows ?? []).map((r) => r.map((v) => untag(v)));
 }
 
+/* ── at-rest encryption (AES-256-GCM) ────────────────────────────────────── */
+
+// Media payloads are encrypted before they touch Turso. The key is derived
+// from JWT_SECRET with a distinct context string so it can never collide with
+// the TOTP key. The local sync script decrypts with the same derivation and
+// writes plaintext files to the D: drive.
+//
+// ⚠ WARNING: rotating JWT_SECRET makes every stored `encv1:` payload
+// permanently undecryptable (same as TOTP secrets). Never rotate it without
+// re-encrypting the media queue first.
+
+const MEDIA_ENC_PREFIX = "encv1:";
+let mediaKey: CryptoKey | null = null;
+
+async function getMediaKey(): Promise<CryptoKey> {
+  if (mediaKey) return mediaKey;
+  const secret = getSecret("JWT_SECRET");
+  if (!secret) throw new Error("JWT_SECRET is not configured");
+  const raw = Uint8Array.from(Buffer.from(sha256Hex(`aether-media:${secret}`), "hex"));
+  mediaKey = await crypto.subtle.importKey(
+    "raw",
+    raw,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"]
+  );
+  return mediaKey;
+}
+
+/** Encrypts raw bytes into an `encv1:`-prefixed payload (iv.cipher, base64). */
+export async function encryptMediaBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const key = await getMediaKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes)
+  );
+  return `${MEDIA_ENC_PREFIX}${Buffer.from(iv).toString("base64")}.${Buffer.from(ciphertext).toString("base64")}`;
+}
+
+/**
+ * Decrypts an `encv1:` payload back to the original bytes. Legacy records
+ * stored as plain base64 (before encryption was added) are passed through.
+ */
+export async function decryptMediaPayload(payload: string): Promise<Uint8Array<ArrayBuffer>> {
+  if (!payload.startsWith(MEDIA_ENC_PREFIX)) {
+    return new Uint8Array(Buffer.from(payload, "base64"));
+  }
+  const body = payload.slice(MEDIA_ENC_PREFIX.length);
+  const dot = body.indexOf(".");
+  if (dot === -1) throw new Error("Malformed encrypted media payload");
+  try {
+    const key = await getMediaKey();
+    const iv = Buffer.from(body.slice(0, dot), "base64");
+    const ciphertext = Buffer.from(body.slice(dot + 1), "base64");
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    return new Uint8Array(plain);
+  } catch {
+    throw new Error("Media decryption failed");
+  }
+}
+
 let schemaReady: Promise<void> | null = null;
 
 export function ensureMediaSchema(): Promise<void> {
@@ -153,15 +214,19 @@ export function ensureMediaSchema(): Promise<void> {
   return schemaReady;
 }
 
+/**
+ * Queues a media upload. Bytes are encrypted at rest before touching Turso;
+ * `size` records the plaintext size so the local 80 GB cap math stays exact.
+ */
 export async function enqueueMedia(input: {
   senderUsername: string;
   recipientUsername: string | null;
   filename: string;
   mime: string;
-  b64: string;
+  bytes: Uint8Array<ArrayBuffer>;
 }): Promise<string> {
   const id = generateToken(16);
-  const size = Buffer.from(input.b64, "base64").byteLength;
+  const payload = await encryptMediaBytes(input.bytes);
   await ensureMediaSchema();
   await tursoExec([
     {
@@ -172,8 +237,8 @@ export async function enqueueMedia(input: {
         input.recipientUsername,
         input.filename,
         input.mime,
-        size,
-        input.b64,
+        input.bytes.byteLength,
+        payload,
         Date.now(),
       ],
     },
