@@ -91,6 +91,18 @@ export async function POST(req: Request) {
       if (theyBlockedMe || iBlockedThem) {
         return jsonError("You cannot message this user.", 403);
       }
+
+      // Respect the recipient's "who can message you" privacy setting.
+      const privacy = await store.getMessagePrivacy(peer.id);
+      if (privacy === "nobody") {
+        return jsonError("This user is not accepting direct messages.", 403);
+      }
+      if (privacy === "friends") {
+        const friends = await store.areFriends(session.user.id, peer.id);
+        if (!friends) {
+          return jsonError("This user only accepts messages from friends.", 403);
+        }
+      }
     }
 
     const ipKey = `chat:${session.user.id}`;

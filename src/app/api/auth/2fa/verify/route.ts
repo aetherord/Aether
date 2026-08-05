@@ -50,8 +50,12 @@ export async function POST(req: Request) {
       return rateLimitedError(rl, "Too many attempts. Please start over.");
     }
 
-    const secret = await decryptString(user.totpSecret);
-    if (!secret || !verifyTotp(secret, code)) {
+    // Try the authenticator code first, then the single-use backup codes
+    // (stored hashed, one-time). Backup codes look like XXXX-XXXX-XXXX.
+    const secret = user.totpSecret ? await decryptString(user.totpSecret) : null;
+    const totpOk = Boolean(secret) && verifyTotp(secret!, code);
+    const backupOk = !totpOk && (await store.redeemBackupCode(user.id, code));
+    if (!totpOk && !backupOk) {
       return jsonError("Invalid 2FA code", 401);
     }
 

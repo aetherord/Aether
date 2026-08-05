@@ -133,9 +133,32 @@ export default function Chat() {
   const [reportFor, setReportFor] = useState<Message | null>(null);
   const [reportReason, setReportReason] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [friends, setFriends] = useState<{ id: number; username: string }[]>([]);
+  const [incoming, setIncoming] = useState<{ id: number; username: string; createdAt: number }[]>([]);
+  const [outgoing, setOutgoing] = useState<{ id: number; username: string; createdAt: number }[]>([]);
+  const [friendModal, setFriendModal] = useState(false);
+  const [friendName, setFriendName] = useState("");
+  const [friendBusy, setFriendBusy] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const loadingOlder = useRef<{ room: string; active: boolean }>({ room: "", active: false });
+
+  const loadFriends = useCallback(async () => {
+    try {
+      const res = await fetch("/api/friends");
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        friends?: { id: number; username: string }[];
+        incoming?: { id: number; username: string; createdAt: number }[];
+        outgoing?: { id: number; username: string; createdAt: number }[];
+      };
+      setFriends(data.friends ?? []);
+      setIncoming(data.incoming ?? []);
+      setOutgoing(data.outgoing ?? []);
+    } catch {
+      /* sidebar stays empty when the call fails */
+    }
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -149,6 +172,7 @@ export default function Chat() {
         }
         setUser(data.user);
         setChecking(false);
+        void loadFriends();
       })
       .catch(() => {
         if (alive) router.replace("/login");
@@ -156,7 +180,7 @@ export default function Chat() {
     return () => {
       alive = false;
     };
-  }, [router]);
+  }, [router, loadFriends]);
 
   // Refresh the DM conversation list whenever the room changes or messages arrive.
   useEffect(() => {
@@ -427,6 +451,53 @@ export default function Chat() {
     }
   };
 
+  const addFriend = async () => {
+    const name = friendName.trim();
+    if (!name || friendBusy) return;
+    setFriendBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/friends", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: name }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error || "Failed to send request");
+      setFriendName("");
+      setFriendModal(false);
+      await loadFriends();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to send request");
+    } finally {
+      setFriendBusy(false);
+    }
+  };
+
+  const respondFriend = async (username: string, accept: boolean) => {
+    try {
+      await fetch("/api/friends", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, accept }),
+      });
+      await loadFriends();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const removeFriend = async (username: string) => {
+    try {
+      await fetch(`/api/friends?username=${encodeURIComponent(username)}`, {
+        method: "DELETE",
+      });
+      await loadFriends();
+    } catch {
+      /* ignore */
+    }
+  };
+
   const adminDelete = async (messageId: number) => {
     setError(null);
     try {
@@ -546,7 +617,90 @@ export default function Chat() {
           </div>
         )}
 
-        <div className="mt-4 px-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-600">
+        <div className="mt-4 px-4 pb-1 flex items-center justify-between">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-600">
+            Friends
+          </span>
+          <button
+            onClick={() => setFriendModal(true)}
+            title="Add a friend"
+            className="text-gray-500 hover:text-white transition-colors text-sm leading-none"
+          >
+            ＋
+          </button>
+        </div>
+        <div className="overflow-y-auto pb-1 max-h-44 shrink-0">
+          {friends.length === 0 && outgoing.length === 0 && incoming.length === 0 && (
+            <p className="px-4 py-1.5 text-xs text-gray-600">
+              No friends yet — add someone to DM them.
+            </p>
+          )}
+          {incoming.map((r) => (
+            <div
+              key={r.username}
+              className="mx-2 mb-1 flex items-center gap-2 rounded-lg bg-amber-400/5 border border-amber-400/20 px-2.5 py-1.5"
+            >
+              <span className="text-xs font-medium text-amber-300 truncate min-w-0 flex-1">
+                {r.username} wants to chat
+              </span>
+              <button
+                onClick={() => void respondFriend(r.username, true)}
+                title="Accept"
+                className="text-emerald-400 hover:text-emerald-300 transition"
+              >
+                ✓
+              </button>
+              <button
+                onClick={() => void respondFriend(r.username, false)}
+                title="Decline"
+                className="text-red-400 hover:text-red-300 transition"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {friends.map((f) => {
+            const active = room.kind === "dm" && room.peer === f.username;
+            return (
+              <button
+                key={f.id}
+                onClick={() => {
+                  setRoom({ kind: "dm", peer: f.username });
+                  setSearchOpen(false);
+                  setSearchResults(null);
+                }}
+                className={`w-full px-4 py-1.5 flex items-center gap-3 text-left transition ${
+                  active ? "bg-white/10" : "hover:bg-white/5"
+                }`}
+                title={`DM ${f.username} — right-click to unfriend`}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  void removeFriend(f.username);
+                }}
+              >
+                <div
+                  className={`shrink-0 w-6 h-6 rounded-full bg-gradient-to-br ${avatarGradient(
+                    f.username
+                  )} flex items-center justify-center text-[10px] font-bold text-white`}
+                >
+                  {f.username.slice(0, 1).toUpperCase()}
+                </div>
+                <span className="text-xs font-medium truncate">{f.username}</span>
+                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-emerald-400/60" />
+              </button>
+            );
+          })}
+          {outgoing.map((r) => (
+            <p
+              key={r.username}
+              className="px-4 py-1 text-[11px] text-gray-600 truncate"
+            >
+              → {r.username} (pending)
+            </p>
+          ))}
+        </div>
+
+        <div className="mt-3 px-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-600">
           Direct messages
         </div>
         <div className="flex-1 overflow-y-auto pb-2">
@@ -741,10 +895,12 @@ export default function Chat() {
                           </div>
                         )}
                         <div
-                          className={`px-4 py-2.5 text-sm leading-relaxed break-words shadow-sm ${
-                            mine
-                              ? "bg-white text-black rounded-2xl rounded-br-md"
-                              : "bg-white/8 border border-white/10 text-gray-100 rounded-2xl rounded-bl-md"
+                          className={`px-3 py-2.5 text-sm leading-relaxed break-words shadow-sm ${
+                            m.mediaRef
+                              ? "bg-black border border-white/10 rounded-2xl"
+                              : mine
+                                ? "bg-white text-black rounded-2xl rounded-br-md"
+                                : "bg-white/8 border border-white/10 text-gray-100 rounded-2xl rounded-bl-md"
                           }`}
                         >
                           {m.mediaRef && brokenMedia.has(m.mediaRef) ? (
@@ -927,6 +1083,51 @@ export default function Chat() {
           </div>
         </div>
       </div>
+
+      {/* Add friend modal */}
+      {friendModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setFriendModal(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-[#141416] border border-white/10 rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold mb-1">Add a friend</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              Enter their username — they&apos;ll get a request they can accept.
+            </p>
+            <input
+              type="text"
+              value={friendName}
+              onChange={(e) => setFriendName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void addFriend();
+              }}
+              placeholder="username"
+              maxLength={20}
+              autoFocus
+              className="w-full px-3 py-2.5 bg-black/40 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition"
+            />
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setFriendModal(false)}
+                className="flex-1 py-2.5 rounded-full border border-white/15 text-sm text-gray-300 hover:bg-white/5 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void addFriend()}
+                disabled={friendBusy || !friendName.trim()}
+                className="flex-1 py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-gray-200 transition disabled:opacity-40"
+              >
+                {friendBusy ? "Sending…" : "Send request"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Report modal */}
       {reportFor && (

@@ -1,5 +1,27 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { hasCloudflareContext } from "./env";
+import { sha256Hex } from "./crypto";
+
+export type MessagePrivacy = "everyone" | "friends" | "nobody";
+
+/** Generates a single backup code like `XXXX-XXXX-XXXX` (unambiguous chars). */
+function generateBackupCode(): string {
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no I/L/O/0/1
+  const rand = new Uint8Array(12);
+  crypto.getRandomValues(rand);
+  let out = "";
+  for (let i = 0; i < 12; i++) out += alphabet[rand[i] % alphabet.length];
+  return `${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8, 12)}`;
+}
+
+function backupCodeHash(code: string): string {
+  // SHA-256 of the normalized (uppercase, stripped) code — plaintext is never stored.
+  return sha256Hex(code.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+}
+
+export function normalizeBackupCode(code: string): string {
+  return code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
 
 export interface UserRow {
   id: number;
@@ -15,6 +37,7 @@ export interface UserRow {
   totpEnabled: boolean;
   role: "user" | "admin";
   mutedUntil: number | null;
+  messagePrivacy: MessagePrivacy;
   createdAt: number;
 }
 
@@ -128,6 +151,7 @@ export interface AuthStore {
   rotateSession(oldHash: string, row: SessionRow): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;
   deleteUserSessions(userId: number): Promise<void>;
+  getSessionsForUser(userId: number): Promise<SessionRow[]>;
   createPending(row: PendingRow): Promise<void>;
   getPending(tokenHash: string): Promise<PendingRow | null>;
   deletePending(tokenHash: string): Promise<void>;
@@ -146,6 +170,26 @@ export interface AuthStore {
   deleteMessage(id: number): Promise<void>;
   setRole(userId: number, role: "user" | "admin"): Promise<void>;
   setMutedUntil(userId: number, until: number | null): Promise<void>;
+  updateEmail(userId: number, email: string): Promise<void>;
+  setMessagePrivacy(userId: number, privacy: MessagePrivacy): Promise<void>;
+  getMessagePrivacy(userId: number): Promise<MessagePrivacy>;
+  /** Friend requests: insert a pending row from → to. */
+  sendFriendRequest(fromId: number, toId: number): Promise<"sent" | "already" | "blocked">;
+  /** Accept (status = accepted) or decline (delete) an incoming request. */
+  respondFriendRequest(userId: number, fromId: number, accept: boolean): Promise<boolean>;
+  removeFriend(userId: number, friendId: number): Promise<void>;
+  /** Accepted friends only, as {id, username}. */
+  listFriends(userId: number): Promise<{ id: number; username: string }[]>;
+  /** Incoming + outgoing pending requests with usernames. */
+  listFriendRequests(userId: number): Promise<{
+    incoming: { id: number; username: string; createdAt: number }[];
+    outgoing: { id: number; username: string; createdAt: number }[];
+  }>;
+  areFriends(a: number, b: number): Promise<boolean>;
+  /** Generates N fresh backup codes; returns plaintext (shown once). */
+  generateBackupCodes(userId: number, count?: number): Promise<string[]>;
+  listBackupCodes(userId: number): Promise<number>;
+  redeemBackupCode(userId: number, code: string): Promise<boolean>;
   consumeRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult>;
 }
 
@@ -228,6 +272,24 @@ CREATE TABLE IF NOT EXISTS blocks (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (blocker_id, blocked_id)
 );
+
+CREATE TABLE IF NOT EXISTS friendships (
+  user_id INTEGER NOT NULL,
+  friend_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, friend_id)
+);
+CREATE INDEX IF NOT EXISTS idx_friendships_friend ON friendships(friend_id, status);
+
+CREATE TABLE IF NOT EXISTS backup_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  code_hash TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_backup_codes_user ON backup_codes(user_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id);
 
 CREATE TABLE IF NOT EXISTS reports (
@@ -248,7 +310,7 @@ CREATE TABLE IF NOT EXISTS rate_limits (
 `;
 
 const USER_COLUMNS =
-  "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, role, muted_until, created_at";
+  "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, role, muted_until, message_privacy, created_at";
 
 const MESSAGE_COLUMNS =
   "id, sender_id, sender_username, recipient_username, content, media_ref, media_mime, created_at";
@@ -317,6 +379,11 @@ class D1AuthStore implements AuthStore {
       }
     }
 
+    // Migration: message privacy on users (added later).
+    if (!existing.has("message_privacy")) {
+      await this.db.exec("ALTER TABLE users ADD COLUMN message_privacy TEXT NOT NULL DEFAULT 'everyone'");
+    }
+
     // Migration: remember flag on sessions + pending_2fa (added later).
     const sessionCols = await this.db.prepare("SELECT name FROM pragma_table_info('sessions')").all();
     const sessionExisting = new Set((sessionCols.results as { name: string }[]).map((c) => c.name));
@@ -351,6 +418,7 @@ class D1AuthStore implements AuthStore {
       totpEnabled: Number(row.totp_enabled) === 1,
       role: row.role === "admin" ? "admin" : "user",
       mutedUntil: row.muted_until == null ? null : Number(row.muted_until),
+      messagePrivacy: row.message_privacy === "friends" || row.message_privacy === "nobody" ? row.message_privacy : "everyone",
       createdAt: Number(row.created_at),
     };
   }
@@ -545,6 +613,24 @@ class D1AuthStore implements AuthStore {
     await this.db.prepare("DELETE FROM sessions WHERE user_id = ?1").bind(userId).run();
   }
 
+  async getSessionsForUser(userId: number): Promise<SessionRow[]> {
+    const res = await this.db
+      .prepare(
+        "SELECT token_hash, user_id, email, remember, expires_at, created_at, last_used_at FROM sessions WHERE user_id = ?1"
+      )
+      .bind(userId)
+      .all();
+    return (res.results as Record<string, unknown>[]).map((r) => ({
+      tokenHash: String(r.token_hash),
+      userId: Number(r.user_id),
+      email: String(r.email),
+      remember: Number(r.remember) === 1,
+      expiresAt: Number(r.expires_at),
+      createdAt: Number(r.created_at),
+      lastUsedAt: Number(r.last_used_at),
+    }));
+  }
+
   async createPending(row: PendingRow): Promise<void> {
     await this.db
       .prepare("INSERT OR REPLACE INTO pending_2fa (token_hash, email, remember, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
@@ -715,6 +801,171 @@ class D1AuthStore implements AuthStore {
     await this.db.prepare("UPDATE users SET muted_until = ?1 WHERE id = ?2").bind(until, userId).run();
   }
 
+  async updateEmail(userId: number, email: string): Promise<void> {
+    await this.db.prepare("UPDATE users SET email = ?1 WHERE id = ?2").bind(email, userId).run();
+  }
+
+  async setMessagePrivacy(userId: number, privacy: MessagePrivacy): Promise<void> {
+    await this.db
+      .prepare("UPDATE users SET message_privacy = ?1 WHERE id = ?2")
+      .bind(privacy, userId)
+      .run();
+  }
+
+  async getMessagePrivacy(userId: number): Promise<MessagePrivacy> {
+    const row = await this.db
+      .prepare("SELECT message_privacy FROM users WHERE id = ?1")
+      .bind(userId)
+      .first();
+    const p = row?.message_privacy;
+    return p === "friends" || p === "nobody" ? p : "everyone";
+  }
+
+  async sendFriendRequest(fromId: number, toId: number): Promise<"sent" | "already" | "blocked"> {
+    if (await this.isBlocked(fromId, toId)) return "blocked";
+    if (await this.areFriends(fromId, toId)) return "already";
+    await this.db
+      .prepare(
+        "INSERT OR REPLACE INTO friendships (user_id, friend_id, status, created_at) VALUES (?1, ?2, 'pending', ?3)"
+      )
+      .bind(fromId, toId, Date.now())
+      .run();
+    return "sent";
+  }
+
+  async respondFriendRequest(userId: number, fromId: number, accept: boolean): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        "SELECT 1 FROM friendships WHERE user_id = ?1 AND friend_id = ?2 AND status = 'pending' LIMIT 1"
+      )
+      .bind(fromId, userId)
+      .first();
+    if (!row) return false;
+    if (accept) {
+      await this.db.batch([
+        this.db
+          .prepare("UPDATE friendships SET status = 'accepted' WHERE user_id = ?1 AND friend_id = ?2")
+          .bind(fromId, userId),
+        // Store the mirror row too so lookups in either direction are trivial.
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO friendships (user_id, friend_id, status, created_at) VALUES (?1, ?2, 'accepted', ?3)"
+          )
+          .bind(userId, fromId, Date.now()),
+      ]);
+    } else {
+      await this.db.batch([
+        this.db.prepare("DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2").bind(fromId, userId),
+        this.db.prepare("DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2").bind(userId, fromId),
+      ]);
+    }
+    return true;
+  }
+
+  async removeFriend(userId: number, friendId: number): Promise<void> {
+    await this.db.batch([
+      this.db.prepare("DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2").bind(userId, friendId),
+      this.db.prepare("DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2").bind(friendId, userId),
+    ]);
+  }
+
+  async listFriends(userId: number): Promise<{ id: number; username: string }[]> {
+    // Accepted friendships store mirror rows, so one direction is enough.
+    const res = await this.db
+      .prepare(
+        `SELECT u.id AS id, u.username AS username FROM users u
+         JOIN friendships f ON f.friend_id = u.id
+         WHERE f.user_id = ?1 AND f.status = 'accepted' ORDER BY u.username ASC`
+      )
+      .bind(userId)
+      .all();
+    return (res.results as Record<string, unknown>[]).map((r) => ({
+      id: Number(r.id),
+      username: String(r.username),
+    }));
+  }
+
+  async listFriendRequests(userId: number): Promise<{
+    incoming: { id: number; username: string; createdAt: number }[];
+    outgoing: { id: number; username: string; createdAt: number }[];
+  }> {
+    // Pending requests exist only as a single row (from → to).
+    const [inRes, outRes] = await Promise.all([
+      this.db
+        .prepare(
+          "SELECT u.id AS id, u.username AS username, f.created_at AS created_at FROM friendships f JOIN users u ON u.id = f.user_id WHERE f.friend_id = ?1 AND f.status = 'pending'"
+        )
+        .bind(userId)
+        .all(),
+      this.db
+        .prepare(
+          "SELECT u.id AS id, u.username AS username, f.created_at AS created_at FROM friendships f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ?1 AND f.status = 'pending'"
+        )
+        .bind(userId)
+        .all(),
+    ]);
+    const map = (r: Record<string, unknown>) => ({
+      id: Number(r.id),
+      username: String(r.username),
+      createdAt: Number(r.created_at),
+    });
+    return {
+      incoming: (inRes.results as Record<string, unknown>[]).map(map),
+      outgoing: (outRes.results as Record<string, unknown>[]).map(map),
+    };
+  }
+
+  async areFriends(a: number, b: number): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        "SELECT 1 FROM friendships WHERE ((user_id = ?1 AND friend_id = ?2) OR (user_id = ?2 AND friend_id = ?1)) AND status = 'accepted' LIMIT 1"
+      )
+      .bind(a, b)
+      .first();
+    return Boolean(row);
+  }
+
+  async generateBackupCodes(userId: number, count = 10): Promise<string[]> {
+    await this.db.prepare("DELETE FROM backup_codes WHERE user_id = ?1").bind(userId).run();
+    const codes: string[] = [];
+    const now = Date.now();
+    for (let i = 0; i < count; i++) {
+      const code = generateBackupCode();
+      codes.push(code);
+      await this.db
+        .prepare(
+          "INSERT INTO backup_codes (user_id, code_hash, used, created_at) VALUES (?1, ?2, 0, ?3)"
+        )
+        .bind(userId, backupCodeHash(code), now)
+        .run();
+    }
+    return codes;
+  }
+
+  async listBackupCodes(userId: number): Promise<number> {
+    const row = await this.db
+      .prepare("SELECT COUNT(*) AS n FROM backup_codes WHERE user_id = ?1 AND used = 0")
+      .bind(userId)
+      .first();
+    return Number(row?.n ?? 0);
+  }
+
+  async redeemBackupCode(userId: number, code: string): Promise<boolean> {
+    const hash = backupCodeHash(code);
+    const row = await this.db
+      .prepare(
+        "SELECT id FROM backup_codes WHERE user_id = ?1 AND code_hash = ?2 AND used = 0 LIMIT 1"
+      )
+      .bind(userId, hash)
+      .first();
+    if (!row) return false;
+    await this.db
+      .prepare("UPDATE backup_codes SET used = 1 WHERE id = ?1")
+      .bind(Number(row.id))
+      .run();
+    return true;
+  }
+
   async addMessage(input: Omit<MessageRow, "id">): Promise<MessageRow> {
     const res = await this.db
       .prepare(
@@ -771,6 +1022,9 @@ class MemoryAuthStore implements AuthStore {
   private messages: MessageRow[] = [];
   private nextMessageId = 1;
   private blocks = new Set<string>(); // "blockerId:blockedId"
+  private friendRows = new Map<string, { user_id: number; friend_id: number; status: string; created_at: number }>();
+  private backupCodes: { id: number; user_id: number; code_hash: string; used: number; created_at: number }[] = [];
+  private nextBackupCodeId = 1;
   private reports: { id: number; messageId: number; reporterId: number; reason: string; createdAt: number }[] = [];
   private nextReportId = 1;
   private rateLimits = new Map<string, { count: number; windowStart: number }>();
@@ -824,6 +1078,7 @@ class MemoryAuthStore implements AuthStore {
       totpEnabled: false,
       role: "user",
       mutedUntil: null,
+      messagePrivacy: "everyone",
       createdAt: Date.now(),
     };
     this.usersByEmail.set(user.email, user);
@@ -898,6 +1153,10 @@ class MemoryAuthStore implements AuthStore {
     for (const [hash, row] of this.sessions) {
       if (row.userId === userId) this.sessions.delete(hash);
     }
+  }
+
+  async getSessionsForUser(userId: number): Promise<SessionRow[]> {
+    return [...this.sessions.values()].filter((s) => s.userId === userId);
   }
 
   async updatePassword(userId: number, passwordHash: string): Promise<void> {
@@ -1014,6 +1273,127 @@ class MemoryAuthStore implements AuthStore {
   async setMutedUntil(userId: number, until: number | null): Promise<void> {
     const user = this.usersById.get(userId);
     if (user) user.mutedUntil = until;
+  }
+
+  async updateEmail(userId: number, email: string): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (!user) return;
+    this.usersByEmail.delete(user.email);
+    user.email = email;
+    this.usersByEmail.set(email, user);
+  }
+
+  async setMessagePrivacy(userId: number, privacy: MessagePrivacy): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) user.messagePrivacy = privacy;
+  }
+
+  async getMessagePrivacy(userId: number): Promise<MessagePrivacy> {
+    return this.usersById.get(userId)?.messagePrivacy ?? "everyone";
+  }
+
+  async sendFriendRequest(fromId: number, toId: number): Promise<"sent" | "already" | "blocked"> {
+    if (this.blocks.has(`${fromId}:${toId}`)) return "blocked";
+    if (await this.areFriends(fromId, toId)) return "already";
+    this.friendRows.set(`${fromId}:${toId}`, {
+      user_id: fromId,
+      friend_id: toId,
+      status: "pending",
+      created_at: Date.now(),
+    });
+    return "sent";
+  }
+
+  async respondFriendRequest(userId: number, fromId: number, accept: boolean): Promise<boolean> {
+    const key = `${fromId}:${userId}`;
+    const row = this.friendRows.get(key);
+    if (!row || row.status !== "pending") return false;
+    if (accept) {
+      row.status = "accepted";
+      this.friendRows.set(`${userId}:${fromId}`, {
+        user_id: userId,
+        friend_id: fromId,
+        status: "accepted",
+        created_at: Date.now(),
+      });
+    } else {
+      this.friendRows.delete(key);
+    }
+    return true;
+  }
+
+  async removeFriend(userId: number, friendId: number): Promise<void> {
+    this.friendRows.delete(`${userId}:${friendId}`);
+    this.friendRows.delete(`${friendId}:${userId}`);
+  }
+
+  async listFriends(userId: number): Promise<{ id: number; username: string }[]> {
+    const out: { id: number; username: string }[] = [];
+    for (const row of this.friendRows.values()) {
+      if (row.status !== "accepted") continue;
+      if (row.user_id === userId) {
+        const u = this.usersById.get(row.friend_id);
+        if (u) out.push({ id: u.id, username: u.username });
+      } else if (row.friend_id === userId) {
+        const u = this.usersById.get(row.user_id);
+        if (u) out.push({ id: u.id, username: u.username });
+      }
+    }
+    out.sort((a, b) => a.username.localeCompare(b.username));
+    return out;
+  }
+
+  async listFriendRequests(userId: number): Promise<{
+    incoming: { id: number; username: string; createdAt: number }[];
+    outgoing: { id: number; username: string; createdAt: number }[];
+  }> {
+    const incoming: { id: number; username: string; createdAt: number }[] = [];
+    const outgoing: { id: number; username: string; createdAt: number }[] = [];
+    for (const row of this.friendRows.values()) {
+      if (row.status !== "pending") continue;
+      if (row.friend_id === userId) {
+        const u = this.usersById.get(row.user_id);
+        if (u) incoming.push({ id: u.id, username: u.username, createdAt: row.created_at });
+      } else if (row.user_id === userId) {
+        const u = this.usersById.get(row.friend_id);
+        if (u) outgoing.push({ id: u.id, username: u.username, createdAt: row.created_at });
+      }
+    }
+    return { incoming, outgoing };
+  }
+
+  async areFriends(a: number, b: number): Promise<boolean> {
+    const row = this.friendRows.get(`${a}:${b}`) ?? this.friendRows.get(`${b}:${a}`);
+    return Boolean(row && row.status === "accepted");
+  }
+
+  async generateBackupCodes(userId: number, count = 10): Promise<string[]> {
+    this.backupCodes = this.backupCodes.filter((c) => c.user_id !== userId);
+    const codes: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const code = generateBackupCode();
+      codes.push(code);
+      this.backupCodes.push({
+        id: this.nextBackupCodeId++,
+        user_id: userId,
+        code_hash: backupCodeHash(code),
+        used: 0,
+        created_at: Date.now(),
+      });
+    }
+    return codes;
+  }
+
+  async listBackupCodes(userId: number): Promise<number> {
+    return this.backupCodes.filter((c) => c.user_id === userId && c.used === 0).length;
+  }
+
+  async redeemBackupCode(userId: number, code: string): Promise<boolean> {
+    const hash = backupCodeHash(code);
+    const found = this.backupCodes.find((c) => c.user_id === userId && c.code_hash === hash && c.used === 0);
+    if (!found) return false;
+    found.used = 1;
+    return true;
   }
 
   async addMessage(input: Omit<MessageRow, "id">): Promise<MessageRow> {

@@ -48,7 +48,11 @@ export async function POST(req: Request) {
     }
 
     await store.enableTotp(user.id);
-    return jsonOk();
+
+    // Generate a fresh set of backup codes — shown exactly once, then only
+    // their hashes live in the DB.
+    const backupCodes = await store.generateBackupCodes(user.id, 10);
+    return jsonOk({ backupCodes });
   } catch (err) {
     return handleApiError(err);
   }
