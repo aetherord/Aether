@@ -83,7 +83,7 @@ export default function EmojiPicker({ onPick, onPickGif }: EmojiPickerProps) {
   }, [tab, gifQuery]);
 
   return (
-    <div className="w-80 max-w-[80vw] h-80 flex flex-col rounded-2xl border border-white/10 bg-[#161619] shadow-2xl overflow-hidden animate-in zoom-in-95 fade-in duration-150">
+    <div className="w-80 max-w-[80vw] h-80 flex flex-col rounded-2xl glass-strong overflow-hidden animate-in zoom-in-95 fade-in duration-150">
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-2">
         {tab === "gifs" ? (

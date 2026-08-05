@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import Background from "@/components/Background";
 import { safeJson } from "@/lib/safeJson";
 
 type Step = "credentials" | "totp";
@@ -60,18 +61,19 @@ export default function Login() {
   };
 
   const inputClass =
-    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-400/50 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] transition";
+    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-white/50 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.12)] transition";
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white px-4">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen flex items-center justify-center text-white px-4 relative">
+      <Background />
+      <div className="relative z-10 w-full max-w-md">
         <Link href="/" className="text-sm text-gray-400 hover:text-white transition-colors">
           ← Back to Aether
         </Link>
 
-        <div className="mt-4 glass rounded-3xl p-8 shadow-2xl shadow-indigo-950/30">
+        <div className="mt-4 glass-strong rounded-3xl p-8">
           <div className="text-center mb-6">
-            <div className="mx-auto mb-3 w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center text-2xl font-serif italic font-bold shadow-lg shadow-indigo-950/50">
+            <div className="mx-auto mb-3 w-12 h-12 rounded-2xl bg-black border border-white/30 flex items-center justify-center text-2xl font-serif italic font-bold text-white shadow-lg shadow-black/50">
               A
             </div>
             <h1 className="text-2xl font-medium">
@@ -149,7 +151,7 @@ export default function Login() {
               <button
                 onClick={login}
                 disabled={loading || !email || !password}
-                className="btn-glow w-full py-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-600 text-white font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none"
+                className="btn-glow w-full py-3 rounded-full bg-white text-black font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none"
               >
                 {loading ? "Logging in..." : "Log in"}
               </button>
@@ -172,7 +174,7 @@ export default function Login() {
               <button
                 onClick={verifyTotp}
                 disabled={loading || totpCode.length !== 6}
-                className="btn-glow w-full py-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-600 text-white font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none"
+                className="btn-glow w-full py-3 rounded-full bg-white text-black font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none"
               >
                 {loading ? "Verifying..." : "Log in"}
               </button>
@@ -185,7 +187,7 @@ export default function Login() {
             </div>
           )}
 
-          {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
+          {error && <p className="text-white text-sm mt-4 text-center">{error}</p>}
 
           {step === "credentials" && (
             <p className="text-center text-sm text-gray-400 mt-6">

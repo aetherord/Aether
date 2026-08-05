@@ -1,9 +1,11 @@
 import Link from "next/link";
+import Background from "@/components/Background";
 
 export default function Privacy() {
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white font-sans">
-      <nav className="sticky top-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-between items-center max-w-7xl mx-auto">
+    <div className="min-h-screen text-white font-sans relative">
+      <Background />
+      <nav className="sticky top-4 z-50 glass px-6 py-4 flex justify-between items-center max-w-7xl mx-auto mt-4 rounded-2xl">
         <Link href="/" className="text-3xl font-serif italic font-bold text-white/90 tracking-tight">A</Link>
         <div className="hidden md:flex gap-8 text-sm font-medium">
           <Link href="/features" className="text-gray-400 hover:text-white transition-colors">Features</Link>
@@ -15,7 +17,7 @@ export default function Privacy() {
         </div>
       </nav>
 
-      <main className="max-w-4xl mx-auto px-6 py-20 space-y-12">
+      <main className="relative z-10 max-w-4xl mx-auto px-6 py-20 space-y-12">
         <h1 className="font-serif text-5xl lg:text-6xl tracking-tight mb-8">Privacy Policy</h1>
         
         <section className="space-y-4">

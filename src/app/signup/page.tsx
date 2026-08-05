@@ -2,6 +2,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Turnstile from "@/components/Turnstile";
+import Background from "@/components/Background";
 import { safeJson } from "@/lib/safeJson";
 
 const MONTH_NAMES = [
@@ -222,11 +223,11 @@ export default function Signup() {
   };
 
   const inputClass =
-    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-400/50 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] transition";
+    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-white/50 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.12)] transition";
   const selectClass =
-    "w-full px-3 py-3 bg-black/30 border border-white/10 rounded-xl text-sm cursor-pointer focus:outline-none focus:border-indigo-400/50 transition";
+    "w-full px-3 py-3 bg-black/30 border border-white/10 rounded-xl text-sm cursor-pointer focus:outline-none focus:border-white/50 transition";
   const primaryBtn =
-    "btn-glow w-full py-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-600 text-white font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none";
+    "btn-glow w-full py-3 rounded-full bg-white text-black font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none";
   const ghostBtn =
     "px-5 py-3 rounded-full border border-white/20 text-gray-300 hover:text-white hover:border-white/50 transition";
 
@@ -239,15 +240,16 @@ export default function Signup() {
   );
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white px-4 py-12">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen flex items-center justify-center text-white px-4 py-12 relative">
+      <Background />
+      <div className="relative z-10 w-full max-w-md">
         <Link href="/" className="text-sm text-gray-400 hover:text-white transition-colors">
           ← Back to Aether
         </Link>
 
-        <div className="mt-4 glass rounded-3xl p-8 shadow-2xl shadow-indigo-950/30">
+        <div className="mt-4 glass-strong rounded-3xl p-8">
           <div className="text-center mb-6">
-            <div className="mx-auto mb-3 w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center text-2xl font-serif italic font-bold shadow-lg shadow-indigo-950/50">
+            <div className="mx-auto mb-3 w-12 h-12 rounded-2xl bg-black border border-white/30 flex items-center justify-center text-2xl font-serif italic font-bold text-white shadow-lg shadow-black/50">
               A
             </div>
             <h1 className="text-2xl font-medium">
@@ -311,7 +313,7 @@ export default function Signup() {
                         Month
                       </option>
                       {MONTH_NAMES.map((m, i) => (
-                        <option key={m} value={i + 1} className="text-white bg-[#141416]">
+                        <option key={m} value={i + 1} className="text-white bg-[#0b0b0d]">
                           {m}
                         </option>
                       ))}
@@ -330,7 +332,7 @@ export default function Signup() {
                         Day
                       </option>
                       {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => (
-                        <option key={d} value={d} className="text-white bg-[#141416]">
+                        <option key={d} value={d} className="text-white bg-[#0b0b0d]">
                           {d}
                         </option>
                       ))}
@@ -352,7 +354,7 @@ export default function Signup() {
                         Year
                       </option>
                       {Array.from({ length: 120 }, (_, i) => nowYear - i).map((y) => (
-                        <option key={y} value={y} className="text-white bg-[#141416]">
+                        <option key={y} value={y} className="text-white bg-[#0b0b0d]">
                           {y}
                         </option>
                       ))}
@@ -555,7 +557,7 @@ export default function Signup() {
             </div>
           )}
 
-          {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
+          {error && <p className="text-white text-sm mt-4 text-center">{error}</p>}
 
           {step === "form" && (
             <p className="text-center text-sm text-gray-400 mt-6">

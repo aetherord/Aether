@@ -123,7 +123,7 @@ export default function AvatarEditor({ file, busy, onCancel, onDone }: AvatarEdi
 
   return (
     <div className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#121215] shadow-2xl p-5">
+      <div className="w-full max-w-sm rounded-2xl glass-strong p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-sm">Crop your photo</h3>
           <button onClick={onCancel} className="text-gray-500 hover:text-white transition-colors p-1" title="Cancel">

@@ -1,26 +1,27 @@
 import Link from "next/link";
 import AuthNav from "@/components/AuthNav";
+import Background from "@/components/Background";
 
 /** Little static chat mock so the hero shows the product, not just a tagline. */
 function ChatMock() {
   return (
-    <div className="glass rounded-3xl shadow-2xl shadow-indigo-950/40 overflow-hidden w-full max-w-lg mx-auto text-left">
+    <div className="glass rounded-3xl overflow-hidden w-full max-w-lg mx-auto text-left">
       {/* Window chrome */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10 bg-white/5">
-        <span className="h-2.5 w-2.5 rounded-full bg-red-400/80" />
-        <span className="h-2.5 w-2.5 rounded-full bg-amber-400/80" />
-        <span className="h-2.5 w-2.5 rounded-full bg-emerald-400/80" />
+        <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
+        <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
+        <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
         <span className="ml-3 text-xs text-gray-400 font-medium">aether — direct message</span>
-        <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] text-emerald-300">
-          <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />
+        <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] text-white/70">
+          <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-white" />
           Live
         </span>
       </div>
 
       {/* Messages */}
-      <div className="px-4 py-5 space-y-3 bg-black/20">
+      <div className="px-4 py-5 space-y-3 bg-black/30">
         <div className="flex items-end gap-2 max-w-[80%]">
-          <div className="w-7 h-7 shrink-0 rounded-full bg-gradient-to-br from-sky-500 to-cyan-400 flex items-center justify-center text-[10px] font-bold">
+          <div className="w-7 h-7 shrink-0 rounded-full bg-white/15 flex items-center justify-center text-[10px] font-bold text-white">
             N
           </div>
           <div className="rounded-2xl rounded-bl-md bg-white/8 border border-white/10 px-3 py-2 text-sm text-gray-100">
@@ -28,12 +29,12 @@ function ChatMock() {
           </div>
         </div>
         <div className="flex items-end gap-2 ml-auto max-w-[80%]">
-          <div className="rounded-2xl rounded-br-md bg-gradient-to-br from-indigo-500 to-fuchsia-600 px-3 py-2 text-sm text-white shadow-lg shadow-indigo-950/40">
+          <div className="rounded-2xl rounded-br-md bg-white text-black px-3 py-2 text-sm shadow-xl shadow-black/50">
             Statuses, E2E and instant sends. Clean.
           </div>
         </div>
         <div className="flex items-end gap-2 max-w-[80%]">
-          <div className="w-7 h-7 shrink-0 rounded-full bg-gradient-to-br from-sky-500 to-cyan-400 flex items-center justify-center text-[10px] font-bold">
+          <div className="w-7 h-7 shrink-0 rounded-full bg-white/15 flex items-center justify-center text-[10px] font-bold text-white">
             N
           </div>
           <div>
@@ -41,8 +42,8 @@ function ChatMock() {
               Sending a photo…
             </div>
             <div className="mt-1.5 flex gap-1 pl-1">
-              <span className="h-10 w-10 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 ring-2 ring-white/20" />
-              <span className="h-10 w-10 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 ring-2 ring-white/20" />
+              <span className="h-10 w-10 rounded-lg bg-gradient-to-br from-white/70 to-white/20 ring-2 ring-white/20" />
+              <span className="h-10 w-10 rounded-lg bg-gradient-to-br from-white/70 to-white/20 ring-2 ring-white/20" />
             </div>
           </div>
         </div>
@@ -58,10 +59,10 @@ function ChatMock() {
               <path d="m21 15-5-5L5 21" />
             </svg>
           </span>
-          <span className="flex-1 rounded-full bg-black/30 border border-white/10 px-4 py-2.5 text-xs text-gray-500">
+          <span className="flex-1 rounded-full bg-black/40 border border-white/10 px-4 py-2.5 text-xs text-gray-500">
             Message Nova…
           </span>
-          <span className="w-9 h-9 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-indigo-950/50">
+          <span className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-black shadow-lg shadow-black/50">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="m22 2-7 20-4-9-9-4Z" />
               <path d="M22 2 11 13" />
@@ -75,20 +76,14 @@ function ChatMock() {
 
 export default function Home() {
   return (
-    <main className="min-h-screen w-full flex flex-col text-white relative overflow-hidden bg-[#07070a]">
-      {/* Aurora background */}
-      <div className="absolute inset-0 z-0" aria-hidden>
-        <div className="aurora-blob w-[520px] h-[520px] bg-indigo-600/40 -top-32 -left-24" />
-        <div className="aurora-blob w-[460px] h-[460px] bg-fuchsia-600/30 top-1/3 -right-32" style={{ animationDelay: "-6s" }} />
-        <div className="aurora-blob w-[420px] h-[420px] bg-sky-500/30 bottom-[-140px] left-1/3" style={{ animationDelay: "-12s" }} />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,#07070a_78%)]" />
-      </div>
+    <main className="min-h-screen w-full flex flex-col text-white relative">
+      <Background />
 
       <div className="relative z-10 max-w-6xl mx-auto px-6 w-full flex flex-col min-h-screen">
         {/* Navbar — floating glass pill */}
         <nav className="sticky top-4 z-50 mt-4 flex justify-between items-center gap-4 glass rounded-2xl px-5 py-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center text-base font-serif italic font-bold shadow-lg shadow-indigo-950/50">
+            <div className="w-8 h-8 rounded-xl bg-black border border-white/30 flex items-center justify-center text-base font-serif italic font-bold text-white shadow-lg shadow-black/50">
               A
             </div>
             <span className="text-sm font-semibold tracking-tight">Aether</span>
@@ -109,7 +104,7 @@ export default function Home() {
         {/* Hero */}
         <section className="flex-1 flex flex-col justify-center items-center text-center py-16 md:py-20 gap-6 max-w-4xl mx-auto w-full">
           <div className="fade-up inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-gray-300">
-            <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-white" />
             The community chat for people who hate noise
           </div>
 
@@ -127,7 +122,7 @@ export default function Home() {
           <div className="fade-up fade-up-3 flex flex-wrap gap-4 mt-2 justify-center">
             <Link
               href="/signup"
-              className="btn-glow px-8 py-3.5 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-600 text-white font-medium hover:brightness-110 active:scale-95 transition-all duration-300"
+              className="btn-glow px-8 py-3.5 rounded-full bg-white text-black font-medium hover:brightness-110 active:scale-95 transition-all duration-300"
             >
               Get started — it&apos;s free
             </Link>
@@ -154,7 +149,6 @@ export default function Home() {
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
                 </svg>
               ),
-              accent: "from-emerald-400 to-teal-500",
               title: "End-to-end encrypted",
               desc: "DMs are locked on your device before they ever reach a server.",
             },
@@ -164,7 +158,6 @@ export default function Home() {
                   <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
                 </svg>
               ),
-              accent: "from-indigo-400 to-violet-500",
               title: "Instant by design",
               desc: "Live streaming, optimistic sends, parallel media uploads.",
             },
@@ -176,7 +169,6 @@ export default function Home() {
                   <path d="m21 15-5-5L5 21" />
                 </svg>
               ),
-              accent: "from-fuchsia-400 to-pink-500",
               title: "Media that respects you",
               desc: "Auto-compressed, EXIF-oriented, encrypted at rest, archived to your drive.",
             },
@@ -187,18 +179,15 @@ export default function Home() {
                   <path d="M12 6v6l4 2" />
                 </svg>
               ),
-              accent: "from-amber-400 to-orange-500",
               title: "Presence that feels human",
               desc: "Online, idle, away, busy, DND — without the status anxiety.",
             },
           ].map((f) => (
             <div
               key={f.title}
-              className="group glass rounded-2xl p-5 transition-all duration-300 hover:bg-white/10 hover:-translate-y-1 hover:shadow-xl hover:shadow-indigo-950/30"
+              className="group glass rounded-2xl p-5 transition-all duration-300 hover:bg-white/10 hover:-translate-y-1 hover:shadow-[0_24px_70px_rgba(0,0,0,0.6)]"
             >
-              <div
-                className={`w-10 h-10 rounded-xl bg-gradient-to-br ${f.accent} flex items-center justify-center shadow-lg mb-4 transition-transform duration-300 group-hover:scale-110`}
-              >
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-white/90 to-white/30 flex items-center justify-center text-black shadow-lg mb-4 transition-transform duration-300 group-hover:scale-110">
                 {f.icon}
               </div>
               <h3 className="text-sm font-semibold mb-1">{f.title}</h3>
@@ -211,7 +200,7 @@ export default function Home() {
         <footer className="border-t border-white/10 py-8">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2.5">
-              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center text-xs font-serif italic font-bold">
+              <div className="w-6 h-6 rounded-lg bg-black border border-white/30 flex items-center justify-center text-xs font-serif italic font-bold text-white">
                 A
               </div>
               <span className="text-sm text-gray-500">Aether — the future of community chat.</span>

@@ -108,7 +108,7 @@ export default function ImageViewer({ srcs, index, onClose, onNavigate }: ImageV
           </a>
           <button
             onClick={onClose}
-            className="w-9 h-9 rounded-lg bg-white/10 hover:bg-red-500/30 hover:text-red-300 transition flex items-center justify-center"
+            className="w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 hover:text-white transition flex items-center justify-center"
             title="Close (Esc)"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

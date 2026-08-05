@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ensureKeyPair } from "@/lib/e2e";
 import { safeJson } from "@/lib/safeJson";
 import AvatarEditor from "@/components/AvatarEditor";
+import Background from "@/components/Background";
 
 interface SessionUser {
   id: number;
@@ -337,15 +338,17 @@ export default function Settings() {
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white px-4">
-        <div className="h-6 w-6 rounded-full border-2 border-white/20 border-t-white animate-spin" />
+      <div className="min-h-screen flex items-center justify-center text-white px-4 relative">
+        <Background />
+        <div className="relative z-10 h-6 w-6 rounded-full border-2 border-white/20 border-t-white animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white px-4 py-8">
-      <div className="max-w-4xl mx-auto">
+    <div className="min-h-screen text-white px-4 py-8 relative">
+      <Background />
+      <div className="relative z-10 max-w-4xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <Link href="/chat" className="text-sm text-gray-400 hover:text-white transition-colors">
             ← Back to chat
@@ -363,7 +366,7 @@ export default function Settings() {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={avatarUrl} alt="avatar" className="w-10 h-10 rounded-full object-cover border border-white/10" />
               ) : (
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-lg font-bold">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-900 flex items-center justify-center text-lg font-bold">
                   {user?.username.slice(0, 1).toUpperCase()}
                 </div>
               )}
@@ -398,16 +401,16 @@ export default function Settings() {
           <div className="flex-1 min-w-0 space-y-5">
             {(error || message || formError || formMessage) && (
               <div className="space-y-2">
-                {error && <p className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-2.5">{error}</p>}
-                {formError && <p className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-2.5">{formError}</p>}
-                {message && <p className="text-sm text-green-400 bg-green-950/40 border border-green-900/50 rounded-xl px-4 py-2.5">{message}</p>}
-                {formMessage && <p className="text-sm text-green-400 bg-green-950/40 border border-green-900/50 rounded-xl px-4 py-2.5">{formMessage}</p>}
+                {error && <p className="text-sm text-white bg-white/10 border border-white/25 rounded-xl px-4 py-2.5">{error}</p>}
+                {formError && <p className="text-sm text-white bg-white/10 border border-white/25 rounded-xl px-4 py-2.5">{formError}</p>}
+                {message && <p className="text-sm text-white bg-white/10 border border-white/25 rounded-xl px-4 py-2.5">{message}</p>}
+                {formMessage && <p className="text-sm text-white bg-white/10 border border-white/25 rounded-xl px-4 py-2.5">{formMessage}</p>}
               </div>
             )}
 
             {/* Profile */}
             {tab === "profile" && (
-              <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <section className="glass rounded-2xl p-6">
                 <h2 className="font-semibold text-lg">Profile picture</h2>
                 <p className="text-sm text-gray-400 mt-0.5 mb-5">Pick a photo, then drag, zoom and rotate to frame it — everyone sees it next to your name.</p>
                 <div className="flex items-center gap-5">
@@ -415,7 +418,7 @@ export default function Settings() {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={avatarUrl} alt="avatar" className="w-20 h-20 rounded-full object-cover border border-white/10" />
                   ) : (
-                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-3xl font-bold">
+                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-900 flex items-center justify-center text-3xl font-bold">
                       {user?.username.slice(0, 1).toUpperCase()}
                     </div>
                   )}
@@ -438,7 +441,7 @@ export default function Settings() {
                       <button
                         onClick={() => void removeAvatar()}
                         disabled={avatarBusy}
-                        className="block text-sm text-gray-400 hover:text-red-400 transition disabled:opacity-40"
+                        className="block text-sm text-gray-400 hover:text-white transition disabled:opacity-40"
                       >
                         Remove photo
                       </button>
@@ -453,7 +456,7 @@ export default function Settings() {
 
             {/* Account */}
             {tab === "account" && (
-              <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <section className="glass rounded-2xl p-6">
                 <h2 className="font-semibold text-lg mb-1">Account</h2>
                 <p className="text-sm text-gray-400 mb-5">Update your email and password. Changing either signs out your other sessions.</p>
                 <div className="space-y-6">
@@ -493,7 +496,7 @@ export default function Settings() {
 
             {/* Privacy */}
             {tab === "privacy" && (
-              <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <section className="glass rounded-2xl p-6">
                 <h2 className="font-semibold text-lg mb-1">Who can message you</h2>
                 <p className="text-sm text-gray-400 mb-5">Control who can send you direct messages.</p>
                 <div className="grid grid-cols-3 gap-2">
@@ -522,7 +525,7 @@ export default function Settings() {
             {/* Security */}
             {tab === "security" && (
               <>
-                <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+                <section className="glass rounded-2xl p-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <h2 className="font-semibold text-lg">Two-factor authentication</h2>
@@ -530,7 +533,7 @@ export default function Settings() {
                         {twoFactorEnabled ? `Enabled — ${backupCodeCount} backup code${backupCodeCount === 1 ? "" : "s"} remaining.` : "Off — add an extra layer of security with TOTP."}
                       </p>
                     </div>
-                    <span className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${twoFactorEnabled ? "bg-green-500/15 text-green-400" : "bg-white/10 text-gray-400"}`}>
+                    <span className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${twoFactorEnabled ? "bg-white/15 text-white" : "bg-white/10 text-gray-400"}`}>
                       {twoFactorEnabled ? "ON" : "OFF"}
                     </span>
                   </div>
@@ -606,15 +609,15 @@ export default function Settings() {
                     <div className="mt-5 space-y-3">
                       <p className="text-sm text-gray-400">To disable, enter the current code from your authenticator app (or a backup code).</p>
                       <input type="text" inputMode="numeric" placeholder="Enter 6-digit code" value={code} onChange={(e) => setCode(e.target.value)} maxLength={6} className="w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition" />
-                      <button onClick={disable} disabled={loading || code.length !== 6} className="w-full py-3 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/10 transition disabled:opacity-40">
+                      <button onClick={disable} disabled={loading || code.length !== 6} className="w-full py-3 rounded-full border border-white/30 text-white hover:bg-white/10 transition disabled:opacity-40">
                         {loading ? "Verifying..." : "Disable 2FA"}
                       </button>
                     </div>
                   )}
 
                   {backupCodes && (
-                    <div className="mt-5 rounded-xl border border-amber-400/30 bg-amber-400/5 p-5 animate-in fade-in duration-500">
-                      <h3 className="font-medium text-amber-300">Backup codes</h3>
+                    <div className="mt-5 rounded-xl border border-white/25 bg-white/5 p-5 animate-in fade-in duration-500">
+                      <h3 className="font-medium text-white">Backup codes</h3>
                       <p className="text-sm text-gray-400 mt-1">
                         Save these now. Each works once in place of your authenticator code, and they won&apos;t be shown again.
                       </p>
@@ -625,7 +628,7 @@ export default function Settings() {
                           </code>
                         ))}
                       </div>
-                      <button onClick={() => setBackupCodes(null)} className="mt-4 w-full py-2.5 rounded-full bg-amber-400 text-black text-sm font-medium hover:bg-amber-300 transition">
+                      <button onClick={() => setBackupCodes(null)} className="mt-4 w-full py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-gray-200 transition">
                         I saved my codes
                       </button>
                     </div>
@@ -633,7 +636,7 @@ export default function Settings() {
                 </section>
 
                 {/* E2E status */}
-                <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+                <section className="glass rounded-2xl p-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <h2 className="font-semibold text-lg">End-to-end encryption</h2>
@@ -641,7 +644,7 @@ export default function Settings() {
                         Direct messages are encrypted on your device before they ever reach the server. Even Aether can&apos;t read them.
                       </p>
                     </div>
-                    <span className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${e2eReady ? "bg-emerald-500/15 text-emerald-400" : "bg-white/10 text-gray-400"}`}>
+                    <span className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${e2eReady ? "bg-white/15 text-white" : "bg-white/10 text-gray-400"}`}>
                       {e2eReady ? "ACTIVE" : "SETUP"}
                     </span>
                   </div>
@@ -655,7 +658,7 @@ export default function Settings() {
 
             {/* Notifications */}
             {tab === "notifications" && (
-              <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <section className="glass rounded-2xl p-6">
                 <h2 className="font-semibold text-lg mb-1">Desktop notifications</h2>
                 <p className="text-sm text-gray-400 mb-5">Get a notification when someone messages you while the tab is in the background.</p>
                 <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/20 px-4 py-3.5">
@@ -678,13 +681,13 @@ export default function Settings() {
 
             {/* Media */}
             {tab === "media" && (
-              <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <section className="glass rounded-2xl p-6">
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="font-semibold text-lg">Media archive</h2>
                     <p className="text-sm text-gray-400 mt-0.5">Images and videos are encrypted in the cloud, then mirrored to your D: drive.</p>
                   </div>
-                  <span className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${mediaStats?.configured ? "bg-green-500/15 text-green-400" : "bg-white/10 text-gray-400"}`}>
+                  <span className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${mediaStats?.configured ? "bg-white/15 text-white" : "bg-white/10 text-gray-400"}`}>
                     {mediaStats?.configured ? "LIVE" : "SETUP"}
                   </span>
                 </div>
@@ -699,7 +702,7 @@ export default function Settings() {
                       <div className="text-[11px] text-gray-500 uppercase tracking-wide">On drive</div>
                     </div>
                     <div className="rounded-lg bg-white/5 border border-white/10 py-3">
-                      <div className="text-xl font-semibold text-amber-400">{mediaStats.pending ?? 0}</div>
+                      <div className="text-xl font-semibold text-white">{mediaStats.pending ?? 0}</div>
                       <div className="text-[11px] text-gray-500 uppercase tracking-wide">Queued</div>
                     </div>
                   </div>

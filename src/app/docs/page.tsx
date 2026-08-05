@@ -1,9 +1,11 @@
 import Link from "next/link";
+import Background from "@/components/Background";
 
 export default function Docs() {
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white font-sans">
-      <nav className="sticky top-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-between items-center max-w-7xl mx-auto">
+    <div className="min-h-screen text-white font-sans relative">
+      <Background />
+      <nav className="sticky top-4 z-50 glass px-6 py-4 flex justify-between items-center max-w-7xl mx-auto mt-4 rounded-2xl">
         <Link href="/" className="text-3xl font-serif italic font-bold text-white/90 tracking-tight">A</Link>
         <div className="hidden md:flex gap-8 text-sm font-medium absolute left-1/2 transform -translate-x-1/2">
           <Link href="/features" className="text-gray-400 hover:text-white transition-colors">Features</Link>
@@ -15,7 +17,7 @@ export default function Docs() {
         </div>
       </nav>
 
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] px-6 text-center">
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-80px)] px-6 text-center">
         <h1 className="font-serif text-6xl lg:text-8xl leading-[1.05] tracking-tight mb-6">
           How to use Aether.
         </h1>

@@ -2,6 +2,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import Turnstile from "@/components/Turnstile";
+import Background from "@/components/Background";
 import { safeJson } from "@/lib/safeJson";
 
 type Step = "email" | "reset" | "done";
@@ -61,13 +62,14 @@ export default function ForgotPassword() {
     "w-full py-3 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition disabled:opacity-40";
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white px-4">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen flex items-center justify-center text-white px-4 relative">
+      <Background />
+      <div className="relative z-10 w-full max-w-md">
         <Link href="/login" className="text-sm text-gray-400 hover:text-white transition-colors">
           ← Back to login
         </Link>
 
-        <div className="mt-4 bg-white/5 border border-white/10 rounded-2xl p-8 animate-in fade-in duration-700">
+        <div className="mt-4 glass-strong rounded-3xl p-8 animate-in fade-in duration-700">
           <div className="text-center mb-6">
             <div className="text-3xl font-serif italic font-bold text-white/90 mb-2">A</div>
             <h1 className="text-2xl font-medium">
@@ -167,7 +169,7 @@ export default function ForgotPassword() {
             </div>
           )}
 
-          {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
+          {error && <p className="text-white text-sm mt-4 text-center">{error}</p>}
         </div>
       </div>
     </div>

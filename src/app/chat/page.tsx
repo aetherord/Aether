@@ -6,6 +6,7 @@ import Link from "next/link";
 import VideoPlayer from "@/components/VideoPlayer";
 import ImageViewer from "@/components/ImageViewer";
 import EmojiPicker from "@/components/EmojiPicker";
+import Background from "@/components/Background";
 import {
   ArchiveIcon,
   ChatIcon,
@@ -93,14 +94,16 @@ function dayLabel(ms: number): string {
   return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 
+// Monochrome avatar gradients — dark slate through black so the white
+// letter keeps contrast. Black & white only.
 const GRADIENTS = [
-  "from-indigo-500 to-purple-500",
-  "from-sky-500 to-cyan-400",
-  "from-emerald-500 to-teal-400",
-  "from-rose-500 to-pink-500",
-  "from-amber-500 to-orange-500",
-  "from-fuchsia-500 to-purple-600",
-  "from-blue-500 to-indigo-400",
+  "from-zinc-600 to-zinc-900",
+  "from-neutral-500 to-zinc-800",
+  "from-gray-700 to-black",
+  "from-zinc-500 to-zinc-900",
+  "from-gray-600 to-zinc-950",
+  "from-neutral-600 to-zinc-900",
+  "from-gray-500 to-neutral-900",
 ];
 
 function avatarGradient(name: string): string {
@@ -109,14 +112,15 @@ function avatarGradient(name: string): string {
   return GRADIENTS[h % GRADIENTS.length];
 }
 
-/** Presence statuses — the user picks one; friends see it as a colored dot. */
+/** Presence statuses — the user picks one; friends see it as a shaded dot.
+ *  Monochrome: brightness encodes the state, the label spells it out. */
 const STATUS_META: Record<string, { label: string; dot: string }> = {
-  online: { label: "Online", dot: "bg-emerald-400" },
-  idle: { label: "Idle", dot: "bg-amber-400" },
-  away: { label: "Away", dot: "bg-orange-400" },
-  busy: { label: "Busy", dot: "bg-rose-500" },
-  dnd: { label: "Do not disturb", dot: "bg-red-500" },
-  offline: { label: "Offline", dot: "bg-gray-500" },
+  online: { label: "Online", dot: "bg-white" },
+  idle: { label: "Idle", dot: "bg-gray-300" },
+  away: { label: "Away", dot: "bg-gray-400" },
+  busy: { label: "Busy", dot: "bg-gray-500" },
+  dnd: { label: "Do not disturb", dot: "bg-gray-600" },
+  offline: { label: "Offline", dot: "bg-gray-700" },
 };
 const STATUS_OPTIONS = Object.keys(STATUS_META);
 
@@ -1037,19 +1041,21 @@ export default function Chat() {
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white">
-        <div className="h-6 w-6 rounded-full border-2 border-white/20 border-t-white animate-spin" />
+      <div className="min-h-screen flex items-center justify-center text-white relative">
+        <Background />
+        <div className="relative z-10 h-6 w-6 rounded-full border-2 border-white/20 border-t-white animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="h-dvh bg-[#0a0a0a] text-white flex overflow-hidden">
+    <div className="h-dvh text-white flex overflow-hidden relative">
+      <Background />
       {/* ══ Sidebar ══ */}
-      <aside className="w-64 shrink-0 border-r border-white/10 flex flex-col bg-[#0c0c0e]">
+      <aside className="w-64 shrink-0 border-r border-white/10 flex flex-col bg-[#050506]/75 backdrop-blur-xl">
         <div className="p-4 pb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center text-base font-serif italic font-bold shadow-lg shadow-indigo-950/50">
+            <div className="w-8 h-8 rounded-full bg-black border border-white/30 flex items-center justify-center text-base font-serif italic font-bold text-white shadow-lg shadow-black/50">
               A
             </div>
             <span className="text-sm font-semibold">Aether</span>
@@ -1101,13 +1107,13 @@ export default function Chat() {
 
           {/* Incoming requests */}
           {incoming.map((r) => (
-            <div key={r.username} className="mx-2 mb-1 flex items-center gap-2 rounded-lg bg-amber-400/5 border border-amber-400/20 px-2 py-1.5">
+            <div key={r.username} className="mx-2 mb-1 flex items-center gap-2 rounded-lg bg-white/5 border border-white/15 px-2 py-1.5">
               <Avatar name={r.username} avatar={r.avatar} size={22} />
-              <span className="text-xs font-medium text-amber-300 truncate min-w-0 flex-1">{r.username} wants to chat</span>
-              <button onClick={() => void respondFriend(r.username, true)} title="Accept" className="text-emerald-400 hover:text-emerald-300 transition p-0.5">
+              <span className="text-xs font-medium text-white/80 truncate min-w-0 flex-1">{r.username} wants to chat</span>
+              <button onClick={() => void respondFriend(r.username, true)} title="Accept" className="text-white hover:text-gray-200 transition p-0.5">
                 <CheckIcon size={13} />
               </button>
-              <button onClick={() => void respondFriend(r.username, false)} title="Decline" className="text-red-400 hover:text-red-300 transition p-0.5">
+              <button onClick={() => void respondFriend(r.username, false)} title="Decline" className="text-gray-400 hover:text-gray-200 transition p-0.5">
                 <XIcon size={13} />
               </button>
             </div>
@@ -1153,7 +1159,7 @@ export default function Chat() {
               <button
                 onClick={() => void cancelRequest(r.username)}
                 title="Cancel request"
-                className="text-gray-500 hover:text-red-400 transition"
+                className="text-gray-500 hover:text-white transition"
               >
                 <XIcon size={12} />
               </button>
@@ -1233,7 +1239,7 @@ export default function Chat() {
                 </svg>
               </button>
               {statusOpen && (
-                <div className="absolute bottom-full left-0 z-30 mb-2 w-44 rounded-xl border border-white/10 bg-[#16161a] shadow-2xl p-1.5">
+                <div className="absolute bottom-full left-0 z-30 mb-2 w-44 rounded-xl glass-strong p-1.5">
                   {STATUS_OPTIONS.map((s) => (
                     <button
                       key={s}
@@ -1252,7 +1258,7 @@ export default function Chat() {
             </div>
           </div>
           {user?.role === "admin" && (
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-full px-1.5 py-0.5">
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-white bg-white/10 border border-white/20 rounded-full px-1.5 py-0.5">
               Admin
             </span>
           )}
@@ -1271,14 +1277,14 @@ export default function Chat() {
         {room && (
           <>
             {/* Header */}
-            <header className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#0d0d0f]/90 backdrop-blur z-10">
+            <header className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#050506]/60 backdrop-blur-xl z-10">
               <div className="flex items-center gap-3 min-w-0">
                 <Avatar name={room.peer} avatar={peerProfile?.avatar} size={36} />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <div className="text-sm font-semibold leading-tight truncate">{roomTitle}</div>
                     {e2eActive && (
-                      <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 rounded-full px-1.5 py-0.5" title="End-to-end encrypted">
+                      <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium text-white bg-white/10 border border-white/20 rounded-full px-1.5 py-0.5" title="End-to-end encrypted">
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                           <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
                           <path d="M7 11V7a5 5 0 0 1 10 0v4" />
@@ -1288,8 +1294,8 @@ export default function Chat() {
                     )}
                   </div>
                   <div className="flex items-center gap-1.5 text-xs">
-                    <span className={`inline-block h-2 w-2 rounded-full ${connected ? "bg-emerald-400" : "bg-red-400"}`} />
-                    <span className={connected ? "text-emerald-400/80" : "text-red-400/80"}>
+                    <span className={`inline-block h-2 w-2 rounded-full ${connected ? "bg-white pulse-dot" : "bg-gray-500"}`} />
+                    <span className={connected ? "text-white/70" : "text-gray-400"}>
                       {connected ? (live ? "Live" : "Connected") : "Reconnecting…"}
                     </span>
                     {peerTime && (
@@ -1305,7 +1311,7 @@ export default function Chat() {
             </header>
 
             {room && !e2eActive && e2eKeys && (
-              <div className="px-4 py-1.5 text-[11px] text-amber-300/90 bg-amber-400/5 border-b border-amber-400/15 flex items-center gap-1.5">
+              <div className="px-4 py-1.5 text-[11px] text-white/70 bg-white/5 border-b border-white/15 flex items-center gap-1.5">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
                 </svg>
@@ -1363,8 +1369,8 @@ export default function Chat() {
                     )}
                     {messages.length === 0 && (
                       <div className="text-center pt-24 animate-in fade-in duration-500">
-                        <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 border border-indigo-400/30 flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(99,102,241,0.2)]">
-                          <ChatIcon size={24} className="text-indigo-300" />
+                        <div className="w-14 h-14 mx-auto rounded-2xl bg-white/5 border border-white/20 flex items-center justify-center mb-4">
+                          <ChatIcon size={24} className="text-white/70" />
                         </div>
                         <p className="text-gray-400 text-sm">Say hello to {room.peer} — it&apos;s all Aether in here.</p>
                       </div>
@@ -1427,7 +1433,7 @@ export default function Chat() {
                                 m.mediaRef
                                   ? "bg-black border border-white/10 rounded-2xl"
                                   : mine
-                                    ? "bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-600 text-white shadow-lg shadow-indigo-950/40 rounded-2xl rounded-br-md"
+                                    ? "bg-white text-black shadow-xl shadow-black/40 rounded-2xl rounded-br-md"
                                     : "bg-white/8 border border-white/10 text-gray-100 rounded-2xl rounded-bl-md"
                               }`}
                             >
@@ -1498,7 +1504,7 @@ export default function Chat() {
                                     onClick={() => void toggleReaction(m, r.emoji)}
                                     className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${
                                       r.mine
-                                        ? "border-indigo-300/50 bg-indigo-500/20 shadow-[0_0_10px_rgba(99,102,241,0.25)]"
+                                        ? "border-white/60 bg-white/20"
                                         : "border-white/10 bg-white/5 hover:bg-white/10"
                                     }`}
                                   >
@@ -1625,7 +1631,7 @@ export default function Chat() {
                             <div className="absolute -bottom-8 right-0 z-10 flex items-center gap-1 text-[11px] animate-in fade-in duration-150">
                               <button
                                 onClick={() => void blockUser(m.senderUsername)}
-                                className="px-2.5 py-1.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-300 hover:bg-red-500/30 hover:text-red-200 transition"
+                                className="px-2.5 py-1.5 rounded-lg bg-white/10 border border-white/30 text-white hover:bg-white/20 transition"
                               >
                                 Block @{m.senderUsername}
                               </button>
@@ -1648,16 +1654,16 @@ export default function Chat() {
             </div>
 
             {error && (
-              <p className="text-red-400 text-sm text-center py-1.5 px-4 bg-red-950/40 border-t border-red-900/50">{error}</p>
+              <p className="text-white text-sm text-center py-1.5 px-4 bg-white/10 border-t border-white/20">{error}</p>
             )}
 
             {/* Composer */}
-            <div className="border-t border-white/10 p-3 sm:p-4 bg-[#0d0d0f]/90 backdrop-blur">
+            <div className="border-t border-white/10 p-3 sm:p-4 bg-[#050506]/60 backdrop-blur-xl">
               <div className="max-w-2xl w-full mx-auto">
                 {/* Editing chip */}
                 {editing && (
                   <div className="mb-2 flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2">
-                    <span className="text-xs text-amber-300 font-medium">Editing message</span>
+                    <span className="text-xs text-white font-medium">Editing message</span>
                     <button
                       onClick={() => {
                         setEditing(null);
@@ -1707,7 +1713,7 @@ export default function Chat() {
                         )}
                         <button
                           onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
-                          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-black border border-white/25 text-white flex items-center justify-center hover:bg-red-600 transition"
+                          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-black border border-white/25 text-white flex items-center justify-center hover:bg-white/20 transition"
                           title="Remove"
                         >
                           <XIcon size={10} />
@@ -1772,7 +1778,7 @@ export default function Chat() {
                         }
                       }}
                       placeholder={editing ? "Edit message…" : `Message ${room.peer}…`}
-                      className="w-full px-4 py-3 pr-12 bg-white/5 border border-white/10 rounded-full text-white placeholder-gray-500 focus:outline-none focus:border-indigo-400/50 focus:bg-white/8 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.14)] transition"
+                      className="w-full px-4 py-3 pr-12 bg-white/5 border border-white/10 rounded-full text-white placeholder-gray-500 focus:outline-none focus:border-white/60 focus:bg-white/8 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.12)] transition"
                       maxLength={4000}
                     />
                     {(sending || uploading) && (
@@ -1787,7 +1793,7 @@ export default function Chat() {
                       (!editing && !draft.trim() && pendingFiles.length === 0) ||
                       (editing ? !editDraft.trim() : false)
                     }
-                    className="shrink-0 px-5 sm:px-6 py-3 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-600 text-white font-medium shadow-lg shadow-indigo-950/50 hover:brightness-110 active:scale-95 transition disabled:opacity-40 disabled:shadow-none disabled:active:scale-100"
+                    className="shrink-0 px-5 sm:px-6 py-3 rounded-full bg-white text-black font-medium shadow-lg shadow-black/50 hover:brightness-110 active:scale-95 transition disabled:opacity-40 disabled:shadow-none disabled:active:scale-100"
                   >
                     {sending || uploading ? (
                       <span className="inline-flex items-center gap-2">
@@ -1821,7 +1827,7 @@ export default function Chat() {
       {/* Add friend modal */}
       {friendModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setFriendModal(false)}>
-          <div className="w-full max-w-sm bg-[#141416] border border-white/10 rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-sm glass-strong rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold mb-1">Add a friend</h2>
             <p className="text-sm text-gray-400 mb-4">Enter their username — they&apos;ll get a request they can accept.</p>
             <input
@@ -1855,7 +1861,7 @@ export default function Chat() {
       {/* Report modal */}
       {reportFor && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setReportFor(null)}>
-          <div className="w-full max-w-sm bg-[#141416] border border-white/10 rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-sm glass-strong rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold mb-1">Report message</h2>
             <p className="text-sm text-gray-400 mb-4">
               From <span className="text-white">{reportFor.senderUsername}</span>
@@ -1875,7 +1881,7 @@ export default function Chat() {
               <button
                 onClick={() => void reportMessage()}
                 disabled={!reportReason.trim()}
-                className="flex-1 py-2.5 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition disabled:opacity-40"
+                className="flex-1 py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-gray-200 transition disabled:opacity-40"
               >
                 Submit report
               </button>
@@ -1887,7 +1893,7 @@ export default function Chat() {
       {/* Edit history modal (admin / sender) */}
       {historyFor && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setHistoryFor(null)}>
-          <div className="w-full max-w-md bg-[#141416] border border-white/10 rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-md glass-strong rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Edit history</h2>
               <button onClick={() => setHistoryFor(null)} className="text-gray-500 hover:text-white transition">
@@ -1907,7 +1913,7 @@ export default function Chat() {
                   <p className="text-sm text-gray-200 break-words">{h.content.startsWith(E2E_PREFIX) ? "🔒 (encrypted)" : h.content}</p>
                 </div>
               ))}
-              <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-3">
+              <div className="rounded-xl border border-white/20 bg-white/5 p-3">
                 <div className="text-[10px] text-gray-600 mb-1">Current version</div>
                 <p className="text-sm text-gray-100 break-words">
                   {(decryptedMap[historyFor.id] ?? historyFor.content).startsWith(E2E_PREFIX) ? "🔒 (encrypted)" : (decryptedMap[historyFor.id] ?? historyFor.content)}
