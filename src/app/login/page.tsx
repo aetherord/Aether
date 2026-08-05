@@ -82,12 +82,13 @@ export default function Login() {
           {step === "credentials" && (
             <div className="space-y-4">
               <input
-                type="email"
-                placeholder="Aether@example.com"
+                type="text"
+                inputMode="email"
+                placeholder="Email or username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && login()}
-                autoComplete="email"
+                autoComplete="username"
                 className={inputClass}
               />
               <input

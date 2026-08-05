@@ -1,5 +1,6 @@
 import {
   isValidEmail,
+  isValidUsername,
   issueSession,
   normalizeEmail,
   PENDING_TTL_MS,
@@ -20,18 +21,18 @@ import { getStore } from "@/lib/store";
 
 /**
  * POST /api/auth/login
- * Email + password. Accounts with 2FA enabled get a short-lived pending
- * cookie and must finish via POST /api/auth/2fa/verify; everyone else is
- * signed straight in.
+ * Username OR email + password. Accounts with 2FA enabled get a short-lived
+ * pending cookie and must finish via POST /api/auth/2fa/verify; everyone
+ * else is signed straight in.
  */
 export async function POST(req: Request) {
   try {
     const body = await readJsonBody(req);
     if (!body) return jsonError("Invalid request body", 400);
 
-    const email = normalizeEmail(typeof body.email === "string" ? body.email : "");
+    const identifier = (typeof body.email === "string" ? body.email : "").trim();
     const password = typeof body.password === "string" ? body.password : "";
-    if (!isValidEmail(email) || !password) {
+    if ((!identifier || (!isValidEmail(identifier) && !isValidUsername(identifier))) || !password) {
       return jsonError("Invalid credentials", 400);
     }
 
@@ -40,10 +41,13 @@ export async function POST(req: Request) {
 
     const ipLimit = await store.consumeRateLimit(`login:ip:${ip}`, 20, 15 * 60 * 1000);
     if (!ipLimit.allowed) return rateLimitedError(ipLimit);
-    const emailLimit = await store.consumeRateLimit(`login:email:${email}`, 10, 15 * 60 * 1000);
-    if (!emailLimit.allowed) return rateLimitedError(emailLimit);
+    const idLimit = await store.consumeRateLimit(`login:id:${identifier.toLowerCase()}`, 10, 15 * 60 * 1000);
+    if (!idLimit.allowed) return rateLimitedError(idLimit);
 
-    const user = await store.getUserByEmail(email);
+    // Accept either the account email or the username.
+    const user = isValidEmail(identifier)
+      ? await store.getUserByEmail(normalizeEmail(identifier))
+      : await store.getUserByUsername(identifier);
     if (!user) return jsonError("Invalid credentials", 401);
 
     const passwordOk = await verifyPassword(password, user.passwordHash);
