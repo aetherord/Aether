@@ -1,5 +1,6 @@
 import { authenticator } from "otplib";
 import bcrypt from "bcryptjs";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { getSecret } from "./env";
 import {
   generateNumericCode,
@@ -44,7 +45,7 @@ export function isValidUsername(username: string): boolean {
 }
 
 export function isValidPassword(password: string): boolean {
-  return password.length >= 8 && password.length <= 72; // 72 = bcrypt input limit
+  return password.length >= 8 && password.length <= 128;
 }
 
 export function isValidDob(dob: string): boolean {
@@ -56,19 +57,68 @@ export function isValidDob(dob: string): boolean {
   return age >= 13 && age <= 120;
 }
 
-/* ── passwords (bcrypt) ───────────────────────────────────────────────────── */
+/* ── passwords (PBKDF2-SHA256 via Web Crypto) ────────────────────────────── */
 
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 12);
+// Pure-JS bcrypt blows the Cloudflare free-tier CPU limit (10ms), so passwords
+// use PBKDF2-SHA256 from the platform-native Web Crypto API instead. 100k is
+// the maximum iteration count Cloudflare's Web Crypto accepts, runs in well
+// under the CPU limit, and is the standard OWASP-recommended baseline. Legacy
+// bcrypt hashes ($2a/$2b$) are still accepted so old accounts keep working.
+const PBKDF2_ITERATIONS = 100000;
+const PBKDF2_KEYLEN = 32; // 256-bit derived key
+const passwordEncoder = new TextEncoder();
+
+async function pbkdf2Derive(
+  password: string,
+  salt: Uint8Array,
+  iterations: number
+): Promise<Uint8Array> {
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    passwordEncoder.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  // Copy the salt so `.buffer` is exactly the salt bytes (a Node Buffer may
+  // share a larger pool buffer, which would silently change the derivation).
+  const saltCopy = new Uint8Array(salt);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: saltCopy.buffer, iterations },
+    keyMaterial,
+    PBKDF2_KEYLEN * 8
+  );
+  return new Uint8Array(bits);
 }
 
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  if (!hash) return false;
-  try {
-    return await bcrypt.compare(password, hash);
-  } catch {
-    return false;
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  const key = await pbkdf2Derive(password, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${Buffer.from(salt).toString("base64")}$${Buffer.from(key).toString("base64")}`;
+}
+
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  if (!stored) return false;
+
+  // Legacy bcrypt hash — verify with bcryptjs for backward compatibility.
+  if (stored.startsWith("$2")) {
+    try {
+      return await bcrypt.compare(password, stored);
+    } catch {
+      return false;
+    }
   }
+
+  const parts = stored.split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2") return false;
+  const iterations = Number(parts[1]);
+  const salt = Buffer.from(parts[2], "base64");
+  const expected = Buffer.from(parts[3], "base64");
+  if (!Number.isFinite(iterations) || iterations <= 0 || salt.length === 0) return false;
+  if (expected.length !== PBKDF2_KEYLEN) return false;
+
+  const actual = Buffer.from(await pbkdf2Derive(password, salt, iterations));
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 /* ── verification codes ───────────────────────────────────────────────────── */

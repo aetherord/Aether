@@ -1,7 +1,58 @@
 "use client";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import Turnstile from "@/components/Turnstile";
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** Custom agreement checkbox: animated square + check, keyboard accessible. */
+function CustomCheckbox({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="group flex w-full items-start gap-3 text-left cursor-pointer select-none"
+    >
+      <span
+        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+          checked
+            ? "border-white bg-white shadow-[0_0_12px_rgba(255,255,255,0.35)]"
+            : "border-white/25 bg-black/30 group-hover:border-white/50 group-hover:bg-white/5 group-active:scale-90"
+        }`}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#0a0a0a"
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`h-3.5 w-3.5 transition-transform duration-200 ${
+            checked ? "scale-100" : "scale-0"
+          }`}
+        >
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      </span>
+      <span className="text-sm leading-snug text-gray-300 transition-colors group-hover:text-gray-200">
+        {children}
+      </span>
+    </button>
+  );
+}
 
 type Step = "form" | "code" | "2fa" | "done";
 
@@ -12,7 +63,9 @@ export default function Signup() {
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [dob, setDob] = useState("");
+  const [dobMonth, setDobMonth] = useState("");
+  const [dobDay, setDobDay] = useState("");
+  const [dobYear, setDobYear] = useState("");
   const [agreedTos, setAgreedTos] = useState(false);
   const [agreedPrivacy, setAgreedPrivacy] = useState(false);
   const [agreedRules, setAgreedRules] = useState(false);
@@ -28,11 +81,19 @@ export default function Signup() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const nowYear = new Date().getFullYear();
+  const daysInMonth =
+    dobMonth && dobYear ? new Date(Number(dobYear), Number(dobMonth), 0).getDate() : 31;
+  const dobValue =
+    dobYear && dobMonth && dobDay
+      ? `${dobYear}-${String(dobMonth).padStart(2, "0")}-${String(dobDay).padStart(2, "0")}`
+      : "";
+
   const formValid =
     email.trim() !== "" &&
     username.trim() !== "" &&
     password.length >= 8 &&
-    dob !== "" &&
+    dobValue !== "" &&
     agreedTos &&
     agreedPrivacy &&
     agreedRules;
@@ -48,7 +109,7 @@ export default function Signup() {
           email,
           username,
           password,
-          dob,
+          dob: dobValue,
           agreedTos,
           agreedPrivacy,
           agreedRules,
@@ -142,10 +203,20 @@ export default function Signup() {
 
   const inputClass =
     "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition";
+  const selectClass =
+    "w-full px-3 py-3 bg-black/30 border border-white/10 rounded-xl text-sm cursor-pointer focus:outline-none focus:border-white/30 transition";
   const primaryBtn =
     "w-full py-3 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition disabled:opacity-40";
   const ghostBtn =
     "px-5 py-3 rounded-full border border-white/20 text-gray-300 hover:text-white hover:border-white/50 transition";
+
+  const ChevronDown = () => (
+    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 flex items-center text-gray-500">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="m6 9 6 6 6-6" />
+      </svg>
+    </span>
+  );
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white px-4 py-12">
@@ -202,57 +273,92 @@ export default function Signup() {
               />
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Date of birth</label>
-                <input
-                  type="date"
-                  value={dob}
-                  onChange={(e) => setDob(e.target.value)}
-                  className={inputClass}
-                />
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="relative">
+                    <select
+                      value={dobMonth}
+                      onChange={(e) => {
+                        setDobMonth(e.target.value);
+                        setDobDay("");
+                      }}
+                      className={`${selectClass} appearance-none pr-8 ${
+                        dobMonth ? "text-white" : "text-gray-500"
+                      }`}
+                    >
+                      <option value="" disabled>
+                        Month
+                      </option>
+                      {MONTH_NAMES.map((m, i) => (
+                        <option key={m} value={i + 1} className="text-white bg-[#141416]">
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown />
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={dobDay}
+                      onChange={(e) => setDobDay(e.target.value)}
+                      className={`${selectClass} appearance-none pr-8 ${
+                        dobDay ? "text-white" : "text-gray-500"
+                      }`}
+                    >
+                      <option value="" disabled>
+                        Day
+                      </option>
+                      {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => (
+                        <option key={d} value={d} className="text-white bg-[#141416]">
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown />
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={dobYear}
+                      onChange={(e) => {
+                        setDobYear(e.target.value);
+                        setDobDay("");
+                      }}
+                      className={`${selectClass} appearance-none pr-8 ${
+                        dobYear ? "text-white" : "text-gray-500"
+                      }`}
+                    >
+                      <option value="" disabled>
+                        Year
+                      </option>
+                      {Array.from({ length: 120 }, (_, i) => nowYear - i).map((y) => (
+                        <option key={y} value={y} className="text-white bg-[#141416]">
+                          {y}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown />
+                  </div>
+                </div>
               </div>
 
-              <div className="space-y-2 text-sm">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={agreedTos}
-                    onChange={(e) => setAgreedTos(e.target.checked)}
-                    className="mt-0.5 accent-white"
-                  />
-                  <span className="text-gray-300">
-                    I accept the{" "}
-                    <Link href="/terms" className="text-white underline">
-                      Terms of Service
-                    </Link>
-                  </span>
-                </label>
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={agreedPrivacy}
-                    onChange={(e) => setAgreedPrivacy(e.target.checked)}
-                    className="mt-0.5 accent-white"
-                  />
-                  <span className="text-gray-300">
-                    I accept the{" "}
-                    <Link href="/privacy" className="text-white underline">
-                      Privacy Policy
-                    </Link>
-                  </span>
-                </label>
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={agreedRules}
-                    onChange={(e) => setAgreedRules(e.target.checked)}
-                    className="mt-0.5 accent-white"
-                  />
-                  <span className="text-gray-300">
-                    I accept the{" "}
-                    <Link href="/rules" className="text-white underline">
-                      Community Rules
-                    </Link>
-                  </span>
-                </label>
+              <div className="space-y-3 pt-1">
+                <CustomCheckbox checked={agreedTos} onChange={setAgreedTos}>
+                  I accept the{" "}
+                  <Link href="/terms" className="text-white underline decoration-white/40 underline-offset-2 hover:decoration-white">
+                    Terms of Service
+                  </Link>
+                </CustomCheckbox>
+                <CustomCheckbox checked={agreedPrivacy} onChange={setAgreedPrivacy}>
+                  I accept the{" "}
+                  <Link href="/privacy" className="text-white underline decoration-white/40 underline-offset-2 hover:decoration-white">
+                    Privacy Policy
+                  </Link>
+                </CustomCheckbox>
+                <CustomCheckbox checked={agreedRules} onChange={setAgreedRules}>
+                  I accept the{" "}
+                  <Link href="/rules" className="text-white underline decoration-white/40 underline-offset-2 hover:decoration-white">
+                    Community Rules
+                  </Link>
+                </CustomCheckbox>
               </div>
 
               <Turnstile onToken={setCfToken} />

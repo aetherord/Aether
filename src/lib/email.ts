@@ -47,7 +47,10 @@ async function brevoErrorMessage(res: Response): Promise<string> {
   }
 
   const lower = message.toLowerCase();
-  if (res.status === 401 || res.status === 403 || lower.includes("ip")) {
+  if (res.status === 401 || lower.includes("key") || lower.includes("unauthor")) {
+    return "Brevo rejected the API key. Double-check BREVO_API_KEY (create a fresh one in your Brevo dashboard under SMTP & API → API Keys).";
+  }
+  if (res.status === 403 || lower.includes("ip")) {
     return (
       "Brevo blocked this request (IP restriction). Open " +
       "https://app.brevo.com/security/authorised_ips and add your IP, or disable the " +
