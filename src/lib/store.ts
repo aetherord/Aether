@@ -48,6 +48,7 @@ export interface MessageRow {
   recipientUsername: string | null;
   content: string;
   mediaRef: string | null;
+  mediaMime: string | null;
   createdAt: number;
 }
 
@@ -115,6 +116,18 @@ export interface AuthStore {
   consumeRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult>;
 }
 
+/** Legacy table from the pre-rework Worker: `is_verified` instead of `verified`. */
+const LEGACY_USER_COLUMNS = [
+  "id",
+  "username",
+  "email",
+  "password_hash",
+  "verification_token",
+  "is_verified",
+  "totp_secret",
+  "created_at",
+] as const;
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,6 +179,7 @@ CREATE TABLE IF NOT EXISTS messages (
   recipient_username TEXT,
   content TEXT NOT NULL,
   media_ref TEXT,
+  media_mime TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
@@ -181,7 +195,7 @@ const USER_COLUMNS =
   "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, created_at";
 
 const MESSAGE_COLUMNS =
-  "id, sender_id, sender_username, recipient_username, content, media_ref, created_at";
+  "id, sender_id, sender_username, recipient_username, content, media_ref, media_mime, created_at";
 
 /** Columns added after the initial release; migrated in on existing databases. */
 const USER_MIGRATIONS: Record<string, string> = {
@@ -191,6 +205,12 @@ const USER_MIGRATIONS: Record<string, string> = {
   agreed_tos: "INTEGER NOT NULL DEFAULT 0",
   agreed_privacy: "INTEGER NOT NULL DEFAULT 0",
   agreed_rules: "INTEGER NOT NULL DEFAULT 0",
+  verified: "INTEGER NOT NULL DEFAULT 0",
+  totp_enabled: "INTEGER NOT NULL DEFAULT 0",
+};
+
+const MESSAGE_MIGRATIONS: Record<string, string> = {
+  media_mime: "TEXT",
 };
 
 /* ── D1 implementation (production / `opennextjs-cloudflare dev`) ─────────── */
@@ -205,7 +225,12 @@ class D1AuthStore implements AuthStore {
 
   ensureSchema(): Promise<void> {
     if (!this.schemaReady) {
-      this.schemaReady = this.init();
+      this.schemaReady = this.init().catch((err) => {
+        // Never leave a failed init cached — a transient error would otherwise
+        // brick every request for the lifetime of the isolate.
+        this.schemaReady = null;
+        throw err;
+      });
     }
     return this.schemaReady;
   }
@@ -219,6 +244,18 @@ class D1AuthStore implements AuthStore {
     for (const [column, definition] of Object.entries(USER_MIGRATIONS)) {
       if (!existing.has(column)) {
         await this.db.exec(`ALTER TABLE users ADD COLUMN ${column} ${definition}`);
+      }
+    }
+    // Legacy pre-rework table used `is_verified` — carry its data over.
+    if (existing.has("is_verified") && !existing.has("verified")) {
+      await this.db.exec("UPDATE users SET verified = is_verified WHERE is_verified = 1");
+    }
+
+    const msgCols = await this.db.prepare("SELECT name FROM pragma_table_info('messages')").all();
+    const msgExisting = new Set((msgCols.results as { name: string }[]).map((c) => c.name));
+    for (const [column, definition] of Object.entries(MESSAGE_MIGRATIONS)) {
+      if (!msgExisting.has(column)) {
+        await this.db.exec(`ALTER TABLE messages ADD COLUMN ${column} ${definition}`);
       }
     }
 
@@ -254,6 +291,7 @@ class D1AuthStore implements AuthStore {
       recipientUsername: row.recipient_username == null ? null : String(row.recipient_username),
       content: String(row.content),
       mediaRef: row.media_ref == null ? null : String(row.media_ref),
+      mediaMime: row.media_mime == null ? null : String(row.media_mime),
       createdAt: Number(row.created_at),
     };
   }
@@ -466,7 +504,7 @@ class D1AuthStore implements AuthStore {
   async addMessage(input: Omit<MessageRow, "id">): Promise<MessageRow> {
     const res = await this.db
       .prepare(
-        "INSERT INTO messages (sender_id, sender_username, recipient_username, content, media_ref, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+        "INSERT INTO messages (sender_id, sender_username, recipient_username, content, media_ref, media_mime, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
       )
       .bind(
         input.senderId,
@@ -474,6 +512,7 @@ class D1AuthStore implements AuthStore {
         input.recipientUsername,
         input.content,
         input.mediaRef,
+        input.mediaMime,
         input.createdAt
       )
       .run();
@@ -482,16 +521,17 @@ class D1AuthStore implements AuthStore {
 
   async consumeRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult> {
     const now = Date.now();
+    // Positional binds only — object/named binds are rejected by this D1 runtime.
     const row = await this.db
       .prepare(
         `INSERT INTO rate_limits (key, count, window_start)
-         VALUES (@key, 1, @now)
+         VALUES (?1, 1, ?2)
          ON CONFLICT(key) DO UPDATE SET
-           count = CASE WHEN rate_limits.window_start = @now THEN rate_limits.count + 1 ELSE 1 END,
-           window_start = CASE WHEN rate_limits.window_start = @now THEN rate_limits.window_start ELSE @now END
+           count = CASE WHEN rate_limits.window_start = ?2 THEN rate_limits.count + 1 ELSE 1 END,
+           window_start = CASE WHEN rate_limits.window_start = ?2 THEN rate_limits.window_start ELSE ?2 END
          RETURNING count, window_start`
       )
-      .bind({ key, now })
+      .bind(key, now)
       .first<{ count: number; window_start: number }>();
 
     const count = row?.count ?? 1;

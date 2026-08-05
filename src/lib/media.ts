@@ -2,9 +2,14 @@ import { getSecret } from "./env";
 import { generateToken } from "./crypto";
 
 /**
- * Media pipeline: uploaded images land in a Turso queue and are mirrored to
- * the local drive (D:\Aether-Images-and-media) by scripts/sync-media.mjs when
- * the machine is on. The cloud copy also serves the images inside the chat.
+ * Media pipeline: uploaded images/videos land in a Turso queue and are
+ * mirrored to the local drive (D:\Aether-Images-and-media) by
+ * scripts/sync-media.mjs when the machine is on. The cloud copy also serves
+ * the media inside the chat.
+ *
+ * NOTE: Turso's HTTP pipeline API requires every argument AND every returned
+ * value to be tagged — e.g. {"type":"text","value":"..."} — raw values are
+ * rejected with a 400. All helpers here handle that wire format.
  */
 
 export const MEDIA_NOT_CONFIGURED =
@@ -19,6 +24,32 @@ export interface MediaRecord {
   size: number;
   b64: string;
   createdAt: number;
+}
+
+/* ── Turso wire format (tagged values) ───────────────────────────────────── */
+
+type TursoValue = { type: "null"; value: null } | { type: "text"; value: string } | { type: "integer"; value: string } | { type: "real"; value: string } | { type: "blob"; value: string };
+
+function tagArg(v: string | number | null): TursoValue {
+  if (v === null || v === undefined) return { type: "null", value: null };
+  if (typeof v === "number") return { type: "integer", value: String(v) };
+  return { type: "text", value: v };
+}
+
+function untag(v: TursoValue | null | undefined): string | number | null {
+  if (!v) return null;
+  switch (v.type) {
+    case "null":
+      return null;
+    case "integer":
+    case "real":
+      return Number(v.value);
+    case "text":
+    case "blob":
+      return v.value;
+    default:
+      return null;
+  }
 }
 
 interface TursoArgs {
@@ -49,7 +80,10 @@ async function tursoExec(requests: TursoArgs[]): Promise<void> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      requests: requests.map((r) => ({ type: "execute", stmt: r })),
+      requests: requests.map((r) => ({
+        type: "execute",
+        stmt: { sql: r.sql, args: (r.args ?? []).map(tagArg) },
+      })),
     }),
   });
   if (!res.ok) throw new Error("Media storage request failed");
@@ -59,7 +93,7 @@ async function tursoExec(requests: TursoArgs[]): Promise<void> {
   }
 }
 
-/** Runs a SELECT and returns the raw row arrays. */
+/** Runs a SELECT and returns the raw row arrays with tagged values unwrapped. */
 async function tursoSelect(
   sql: string,
   args: (string | number | null)[] = []
@@ -72,19 +106,25 @@ async function tursoSelect(
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      requests: [{ type: "execute", stmt: { sql, args } }],
+      requests: [
+        {
+          type: "execute",
+          stmt: { sql, args: args.map(tagArg) },
+        },
+      ],
     }),
   });
   if (!res.ok) throw new Error("Media storage request failed");
   const data = (await res.json()) as {
     results?: {
       type: string;
-      response?: { result?: { rows?: { row: unknown[] }[] } };
+      response?: { result?: { rows?: TursoValue[][] } };
     }[];
   };
   const first = data.results?.[0];
   if (!first || first.type !== "ok") throw new Error("Media storage request failed");
-  return (first.response?.result?.rows ?? []).map((r) => r.row);
+  // Turso returns each row as a plain array of tagged values.
+  return (first.response?.result?.rows ?? []).map((r) => r.map((v) => untag(v)));
 }
 
 let schemaReady: Promise<void> | null = null;

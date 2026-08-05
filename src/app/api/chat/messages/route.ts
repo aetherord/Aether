@@ -37,6 +37,10 @@ export async function POST(req: Request) {
     const content = typeof body.content === "string" ? body.content.slice(0, MAX_MESSAGE_LENGTH) : "";
     const mediaRef =
       typeof body.mediaRef === "string" && body.mediaRef ? body.mediaRef.slice(0, 64) : null;
+    const mediaMime =
+      typeof body.mediaMime === "string" && body.mediaMime
+        ? body.mediaMime.toLowerCase().slice(0, 64)
+        : null;
     if (!content.trim() && !mediaRef) return jsonError("Message is empty", 400);
 
     const store = await getStore();
@@ -54,6 +58,7 @@ export async function POST(req: Request) {
       recipientUsername: null, // public room for now
       content: content.trim(),
       mediaRef,
+      mediaMime,
       createdAt: Date.now(),
     });
     return jsonOk({ message });
