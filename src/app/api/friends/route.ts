@@ -19,7 +19,30 @@ export async function GET(req: Request) {
       store.listFriends(session.user.id),
       store.listFriendRequests(session.user.id),
     ]);
-    return jsonOk({ friends, ...requests });
+
+    // Attach each friend/requester's avatar + presence so the sidebar can show
+    // real PFPs and status dots.
+    const withAvatars = async (
+      list: { id: number; username: string }[]
+    ): Promise<{ id: number; username: string; avatar: string | null; status: string }[]> => {
+      const out: { id: number; username: string; avatar: string | null; status: string }[] = [];
+      for (const u of list) {
+        const p = await store.getProfileByUsername(u.username);
+        out.push({
+          id: u.id,
+          username: u.username,
+          avatar: p?.avatar ?? null,
+          status: p?.status ?? "offline",
+        });
+      }
+      return out;
+    };
+
+    return jsonOk({
+      friends: await withAvatars(friends),
+      incoming: await withAvatars(requests.incoming),
+      outgoing: await withAvatars(requests.outgoing),
+    });
   } catch (err) {
     return handleApiError(err);
   }

@@ -36,7 +36,16 @@ export async function GET(req: Request) {
 
     const res = json({
       authenticated: true,
-      user: { id: user.id, email: user.email, username: user.username, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+        avatar: user.avatar,
+        timezone: user.timezone,
+        hasPubkey: Boolean(user.pubkey),
+        status: user.status ?? "online",
+      },
       twoFactorEnabled: user.totpEnabled,
       mutedUntil: user.mutedUntil,
     });

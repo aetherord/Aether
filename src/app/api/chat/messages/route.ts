@@ -5,7 +5,9 @@ import {
   jsonOk,
   readJsonBody,
 } from "@/lib/http";
-import { getStore, type ChatRoom } from "@/lib/store";
+import { getStore, type ChatRoom, type MessageRow } from "@/lib/store";
+import { containsExtremeSlur, SLUR_BLOCK_MESSAGE } from "@/lib/contentFilter";
+import { E2E_PREFIX } from "@/lib/e2e";
 
 const MAX_MESSAGE_LENGTH = 4000;
 const MESSAGE_RATE_WINDOW = 10 * 60 * 1000;
@@ -24,7 +26,64 @@ function parseRoom(url: URL, me: string): ChatRoom {
   return { kind: "community" };
 }
 
-/** GET /api/chat/messages?room=community|dm&peer=...&before=<id> */
+/**
+ * Attaches `replyTo` (snippet of the referenced message) and `reactions`
+ * (grouped counts) to every message in a batch.
+ */
+async function decorate(
+  store: ReturnType<typeof getStore> extends Promise<infer T> ? T : never,
+  userId: number,
+  messages: MessageRow[]
+): Promise<unknown[]> {
+  if (messages.length === 0) return [];
+
+  const replyIds = messages
+    .map((m) => m.replyToId)
+    .filter((id): id is number => id != null);
+  const replyMap = new Map<number, MessageRow>();
+  if (replyIds.length > 0) {
+    for (const r of await store.getMessagesByIds(replyIds)) replyMap.set(r.id, r);
+  }
+
+  const reactions = await store.listReactions(
+    messages.map((m) => m.id),
+    userId
+  );
+  const byMessage = new Map<number, { emoji: string; count: number; mine: boolean }[]>();
+  for (const r of reactions) {
+    const list = byMessage.get(r.messageId) ?? [];
+    list.push(r);
+    byMessage.set(r.messageId, list);
+  }
+
+  return messages.map((m) => {
+    const ref = m.replyToId != null ? replyMap.get(m.replyToId) : undefined;
+    return {
+      id: m.id,
+      senderId: m.senderId,
+      senderUsername: m.senderUsername,
+      recipientUsername: m.recipientUsername,
+      content: m.content,
+      mediaRef: m.mediaRef,
+      mediaMime: m.mediaMime,
+      replyToId: m.replyToId,
+      editedAt: m.editedAt,
+      createdAt: m.createdAt,
+      replyTo: ref
+        ? {
+            id: ref.id,
+            senderUsername: ref.senderUsername,
+            content: ref.content.slice(0, 200),
+            mediaRef: ref.mediaRef,
+            mediaMime: ref.mediaMime,
+          }
+        : null,
+      reactions: byMessage.get(m.id) ?? [],
+    };
+  });
+}
+
+/** GET /api/chat/messages?room=dm&peer=...&before=<id> */
 export async function GET(req: Request) {
   try {
     const session = await resolveSession(req);
@@ -38,13 +97,14 @@ export async function GET(req: Request) {
 
     const raw = await store.listMessages(room, before, 50);
 
-    // Respect the user's block list (community + DM threads). hasMore is
-    // computed from the raw count so pagination doesn't stall when blocked
-    // users occupy rows in the batch.
+    // Respect the user's block list.
     const blocked = new Set(await store.getBlockedIds(session.user.id));
     const messages = blocked.size > 0 ? raw.filter((m) => !blocked.has(m.senderId)) : raw;
 
-    return jsonOk({ messages, hasMore: raw.length === 50 });
+    return jsonOk({
+      messages: await decorate(store, session.user.id, messages),
+      hasMore: raw.length === 50,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -70,6 +130,8 @@ export async function POST(req: Request) {
       typeof body.recipient === "string" && body.recipient.trim()
         ? body.recipient.trim().slice(0, 32)
         : null;
+    const replyToRaw = Number(body.replyToId ?? 0);
+    const replyToId = Number.isFinite(replyToRaw) && replyToRaw > 0 ? replyToRaw : null;
     if (!content.trim() && !mediaRef) return jsonError("Message is empty", 400);
 
     const store = await getStore();
@@ -105,12 +167,25 @@ export async function POST(req: Request) {
       }
     }
 
-    const ipKey = `chat:${session.user.id}`;
-    const rl = await store.consumeRateLimit(ipKey, MESSAGE_RATE_LIMIT, MESSAGE_RATE_WINDOW);
+    // A reply must point at a real message in this same thread.
+    if (replyToId != null) {
+      const target = await store.getMessagesByIds([replyToId]);
+      if (target.length === 0) return jsonError("The message you replied to no longer exists.", 400);
+    }
+
+    const rl = await store.consumeRateLimit(`chat:${session.user.id}`, MESSAGE_RATE_LIMIT, MESSAGE_RATE_WINDOW);
     if (!rl.allowed) {
       return jsonError("You are sending messages too quickly.", 429, {
         "Retry-After": String(rl.retryAfterSec),
       });
+    }
+
+    // Extreme slurs are blocked; regular profanity is fine. Skipped for
+    // E2E ciphertext (unreadable here) — the client pre-filters those
+    // before encrypting. Runs after the rate limit so blocked spam still
+    // burns quota.
+    if (content.trim() && !content.startsWith(E2E_PREFIX) && containsExtremeSlur(content)) {
+      return jsonError(SLUR_BLOCK_MESSAGE, 400);
     }
 
     const message = await store.addMessage({
@@ -120,9 +195,12 @@ export async function POST(req: Request) {
       content: content.trim(),
       mediaRef,
       mediaMime,
+      replyToId,
+      editedAt: null,
       createdAt: Date.now(),
     });
-    return jsonOk({ message });
+    const [decorated] = await decorate(store, session.user.id, [message]);
+    return jsonOk({ message: decorated });
   } catch (err) {
     return handleApiError(err);
   }

@@ -8,7 +8,10 @@ import type { NextRequest } from "next/server";
  * so it is a tripwire, not a full DDoS defense.
  */
 const BURST_WINDOW_MS = 60_000;
-const BURST_MAX_PER_IP = 600;
+// Generous per-IP ceiling: one page load + polling fires ~10 requests, and
+// several users can share a NAT IP. The app routes still enforce their own
+// per-user limits; this is only a volumetric tripwire.
+const BURST_MAX_PER_IP = 1_500;
 const MAX_TRACKED_IPS = 10_000;
 
 const requestLog = new Map<string, number[]>();
@@ -32,11 +35,27 @@ export function middleware(request: NextRequest) {
   const forwarded = request.headers.get("x-forwarded-for");
   const ip = forwarded?.split(",")[0]?.trim() || "unknown";
 
-  if (isBursting(ip)) {
-    return new NextResponse("Too Many Requests", {
-      status: 429,
-      headers: { "Retry-After": "10" },
-    });
+  // Long-lived SSE chat streams are a single request each. Burst-limiting them
+  // makes the browser's EventSource auto-reconnect loop hammer the origin,
+  // which is exactly the storm we're trying to shed. Scoped to the stream path
+  // so the header can't be used to dodge the limiter on any other endpoint.
+  const urlPath = new URL(request.url).pathname;
+  const isStream =
+    urlPath === "/api/chat/stream" &&
+    (request.headers.get("accept") ?? "").includes("text/event-stream");
+
+  if (!isStream && isBursting(ip)) {
+    // JSON body so API clients never choke on a plain-text 429.
+    return NextResponse.json(
+      { error: "Too many requests. Please slow down and try again." },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": "10",
+          "Cache-Control": "no-store",
+        },
+      }
+    );
   }
 
   const response = NextResponse.next();

@@ -2,6 +2,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import Turnstile from "@/components/Turnstile";
+import { safeJson } from "@/lib/safeJson";
 
 type Step = "email" | "reset" | "done";
 
@@ -24,7 +25,7 @@ export default function ForgotPassword() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, turnstileToken: cfToken ?? undefined }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await safeJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error || "Failed to send reset code");
       setStep("reset");
     } catch (err: unknown) {
@@ -44,7 +45,7 @@ export default function ForgotPassword() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, code, password, turnstileToken: cfToken ?? undefined }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await safeJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error || "Invalid reset code");
       setStep("done");
     } catch (err: unknown) {

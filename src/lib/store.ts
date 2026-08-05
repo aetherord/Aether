@@ -38,6 +38,14 @@ export interface UserRow {
   role: "user" | "admin";
   mutedUntil: number | null;
   messagePrivacy: MessagePrivacy;
+  /** Base64 X25519 public key for end-to-end encrypted DMs (set by the client). */
+  pubkey: string | null;
+  /** IANA timezone name, reported by the client so DMs can show the peer's time. */
+  timezone: string | null;
+  /** media_ref of the user's profile picture in the media queue, if any. */
+  avatar: string | null;
+  /** Presence status: online | idle | away | busy | dnd | offline. */
+  status: string;
   createdAt: number;
 }
 
@@ -91,6 +99,8 @@ export interface MessageRow {
   content: string;
   mediaRef: string | null;
   mediaMime: string | null;
+  replyToId: number | null;
+  editedAt: number | null;
   createdAt: number;
 }
 
@@ -173,6 +183,27 @@ export interface AuthStore {
   updateEmail(userId: number, email: string): Promise<void>;
   setMessagePrivacy(userId: number, privacy: MessagePrivacy): Promise<void>;
   getMessagePrivacy(userId: number): Promise<MessagePrivacy>;
+  /** Stores the client's E2E public key + timezone for a user. */
+  setProfileKeys(userId: number, pubkey: string | null, timezone: string | null): Promise<void>;
+  setAvatar(userId: number, avatar: string | null): Promise<void>;
+  setStatus(userId: number, status: string): Promise<void>;
+  getProfileByUsername(username: string): Promise<{
+    username: string;
+    avatar: string | null;
+    timezone: string | null;
+    status: string;
+    createdAt: number;
+  } | null>;
+  getMessagesByIds(ids: number[]): Promise<MessageRow[]>;
+  /** Edits an own message: stores the old content in history, returns false if not allowed. */
+  editMessage(messageId: number, userId: number, content: string): Promise<boolean>;
+  listMessageEdits(messageId: number): Promise<{ content: string; editedAt: number }[]>;
+  /** Toggles a reaction; returns "added" or "removed". */
+  toggleReaction(messageId: number, userId: number, username: string, emoji: string): Promise<"added" | "removed">;
+  listReactions(
+    messageIds: number[],
+    userId: number
+  ): Promise<{ messageId: number; emoji: string; count: number; mine: boolean }[]>;
   /** Friend requests: insert a pending row from → to. */
   sendFriendRequest(fromId: number, toId: number): Promise<"sent" | "already" | "blocked">;
   /** Accept (status = accepted) or decline (delete) an incoming request. */
@@ -261,10 +292,30 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   media_ref TEXT,
   media_mime TEXT,
+  reply_to INTEGER,
+  edited_at INTEGER,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_username, created_at);
+
+CREATE TABLE IF NOT EXISTS message_edits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL,
+  old_content TEXT NOT NULL,
+  edited_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_message_edits_message ON message_edits(message_id);
+
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_id, user_id, emoji)
+);
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id);
 
 CREATE TABLE IF NOT EXISTS blocks (
   blocker_id INTEGER NOT NULL,
@@ -310,10 +361,10 @@ CREATE TABLE IF NOT EXISTS rate_limits (
 `;
 
 const USER_COLUMNS =
-  "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, role, muted_until, message_privacy, created_at";
+  "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, role, muted_until, message_privacy, pubkey, timezone, avatar, status, created_at";
 
 const MESSAGE_COLUMNS =
-  "id, sender_id, sender_username, recipient_username, content, media_ref, media_mime, created_at";
+  "id, sender_id, sender_username, recipient_username, content, media_ref, media_mime, reply_to, edited_at, created_at";
 
 /** Columns added after the initial release; migrated in on existing databases. */
 const USER_MIGRATIONS: Record<string, string> = {
@@ -327,10 +378,16 @@ const USER_MIGRATIONS: Record<string, string> = {
   totp_enabled: "INTEGER NOT NULL DEFAULT 0",
   role: "TEXT NOT NULL DEFAULT 'user'",
   muted_until: "INTEGER",
+  pubkey: "TEXT",
+  timezone: "TEXT",
+  avatar: "TEXT",
+  status: "TEXT NOT NULL DEFAULT 'online'",
 };
 
 const MESSAGE_MIGRATIONS: Record<string, string> = {
   media_mime: "TEXT",
+  reply_to: "INTEGER",
+  edited_at: "INTEGER",
 };
 
 /* ── D1 implementation (production / `opennextjs-cloudflare dev`) ─────────── */
@@ -419,6 +476,10 @@ class D1AuthStore implements AuthStore {
       role: row.role === "admin" ? "admin" : "user",
       mutedUntil: row.muted_until == null ? null : Number(row.muted_until),
       messagePrivacy: row.message_privacy === "friends" || row.message_privacy === "nobody" ? row.message_privacy : "everyone",
+      pubkey: row.pubkey == null ? null : String(row.pubkey),
+      timezone: row.timezone == null ? null : String(row.timezone),
+      avatar: row.avatar == null ? null : String(row.avatar),
+      status: row.status == null ? "online" : String(row.status),
       createdAt: Number(row.created_at),
     };
   }
@@ -432,6 +493,8 @@ class D1AuthStore implements AuthStore {
       content: String(row.content),
       mediaRef: row.media_ref == null ? null : String(row.media_ref),
       mediaMime: row.media_mime == null ? null : String(row.media_mime),
+      replyToId: row.reply_to == null ? null : Number(row.reply_to),
+      editedAt: row.edited_at == null ? null : Number(row.edited_at),
       createdAt: Number(row.created_at),
     };
   }
@@ -812,6 +875,138 @@ class D1AuthStore implements AuthStore {
       .run();
   }
 
+  async setProfileKeys(
+    userId: number,
+    pubkey: string | null,
+    timezone: string | null
+  ): Promise<void> {
+    await this.db
+      .prepare("UPDATE users SET pubkey = ?1, timezone = ?2 WHERE id = ?3")
+      .bind(pubkey, timezone, userId)
+      .run();
+  }
+
+  async setAvatar(userId: number, avatar: string | null): Promise<void> {
+    await this.db.prepare("UPDATE users SET avatar = ?1 WHERE id = ?2").bind(avatar, userId).run();
+  }
+
+  async setStatus(userId: number, status: string): Promise<void> {
+    await this.db.prepare("UPDATE users SET status = ?1 WHERE id = ?2").bind(status, userId).run();
+  }
+
+  async getProfileByUsername(username: string): Promise<{
+    username: string;
+    avatar: string | null;
+    timezone: string | null;
+    status: string;
+    createdAt: number;
+  } | null> {
+    const row = await this.db
+      .prepare("SELECT username, avatar, timezone, status, created_at FROM users WHERE username = ?1 LIMIT 1")
+      .bind(username)
+      .first();
+    if (!row) return null;
+    return {
+      username: String(row.username),
+      avatar: row.avatar == null ? null : String(row.avatar),
+      timezone: row.timezone == null ? null : String(row.timezone),
+      status: row.status == null ? "online" : String(row.status),
+      createdAt: Number(row.created_at),
+    };
+  }
+
+  async getMessagesByIds(ids: number[]): Promise<MessageRow[]> {
+    if (ids.length === 0) return [];
+    const ph = ids.map((_, i) => `?${i + 1}`).join(",");
+    const res = await this.db
+      .prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id IN (${ph})`)
+      .bind(...ids)
+      .all();
+    return (res.results as Record<string, unknown>[]).map(D1AuthStore.toMessage);
+  }
+
+  async editMessage(messageId: number, userId: number, content: string): Promise<boolean> {
+    const row = await this.db
+      .prepare("SELECT sender_id, content FROM messages WHERE id = ?1 LIMIT 1")
+      .bind(messageId)
+      .first();
+    if (!row || Number(row.sender_id) !== userId) return false;
+    const now = Date.now();
+    await this.db.batch([
+      this.db
+        .prepare(
+          "INSERT INTO message_edits (message_id, old_content, edited_at) VALUES (?1, ?2, ?3)"
+        )
+        .bind(messageId, String(row.content), now),
+      this.db
+        .prepare("UPDATE messages SET content = ?1, edited_at = ?2 WHERE id = ?3")
+        .bind(content, now, messageId),
+    ]);
+    return true;
+  }
+
+  async listMessageEdits(messageId: number): Promise<{ content: string; editedAt: number }[]> {
+    const res = await this.db
+      .prepare(
+        "SELECT old_content, edited_at FROM message_edits WHERE message_id = ?1 ORDER BY edited_at ASC"
+      )
+      .bind(messageId)
+      .all();
+    return (res.results as Record<string, unknown>[]).map((r) => ({
+      content: String(r.old_content),
+      editedAt: Number(r.edited_at),
+    }));
+  }
+
+  async toggleReaction(
+    messageId: number,
+    userId: number,
+    username: string,
+    emoji: string
+  ): Promise<"added" | "removed"> {
+    const row = await this.db
+      .prepare(
+        "SELECT 1 FROM reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3 LIMIT 1"
+      )
+      .bind(messageId, userId, emoji)
+      .first();
+    if (row) {
+      await this.db
+        .prepare("DELETE FROM reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3")
+        .bind(messageId, userId, emoji)
+        .run();
+      return "removed";
+    }
+    await this.db
+      .prepare(
+        "INSERT OR IGNORE INTO reactions (message_id, user_id, username, emoji, created_at) VALUES (?1, ?2, ?3, ?4, ?5)"
+      )
+      .bind(messageId, userId, username, emoji, Date.now())
+      .run();
+    return "added";
+  }
+
+  async listReactions(
+    messageIds: number[],
+    userId: number
+  ): Promise<{ messageId: number; emoji: string; count: number; mine: boolean }[]> {
+    if (messageIds.length === 0) return [];
+    const ph = messageIds.map((_, i) => `?${i + 1}`).join(",");
+    const res = await this.db
+      .prepare(
+        `SELECT message_id, emoji, COUNT(*) AS n, MAX(CASE WHEN user_id = ?${messageIds.length + 1} THEN 1 ELSE 0 END) AS mine
+         FROM reactions WHERE message_id IN (${ph}) GROUP BY message_id, emoji`
+      )
+      .bind(...messageIds, userId)
+      .all();
+    return (res.results as Record<string, unknown>[]).map((r) => ({
+      messageId: Number(r.message_id),
+      emoji: String(r.emoji),
+      count: Number(r.n),
+      mine: Number(r.mine) === 1,
+    }));
+  }
+
   async getMessagePrivacy(userId: number): Promise<MessagePrivacy> {
     const row = await this.db
       .prepare("SELECT message_privacy FROM users WHERE id = ?1")
@@ -969,7 +1164,7 @@ class D1AuthStore implements AuthStore {
   async addMessage(input: Omit<MessageRow, "id">): Promise<MessageRow> {
     const res = await this.db
       .prepare(
-        "INSERT INTO messages (sender_id, sender_username, recipient_username, content, media_ref, media_mime, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        "INSERT INTO messages (sender_id, sender_username, recipient_username, content, media_ref, media_mime, reply_to, edited_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
       )
       .bind(
         input.senderId,
@@ -978,6 +1173,8 @@ class D1AuthStore implements AuthStore {
         input.content,
         input.mediaRef,
         input.mediaMime,
+        input.replyToId,
+        input.editedAt,
         input.createdAt
       )
       .run();
@@ -1079,6 +1276,10 @@ class MemoryAuthStore implements AuthStore {
       role: "user",
       mutedUntil: null,
       messagePrivacy: "everyone",
+      pubkey: null,
+      timezone: null,
+      avatar: null,
+      status: "online",
       createdAt: Date.now(),
     };
     this.usersByEmail.set(user.email, user);
@@ -1288,6 +1489,107 @@ class MemoryAuthStore implements AuthStore {
     if (user) user.messagePrivacy = privacy;
   }
 
+  async setProfileKeys(
+    userId: number,
+    pubkey: string | null,
+    timezone: string | null
+  ): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) {
+      user.pubkey = pubkey;
+      user.timezone = timezone;
+    }
+  }
+
+  async setAvatar(userId: number, avatar: string | null): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) user.avatar = avatar;
+  }
+
+  async setStatus(userId: number, status: string): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) user.status = status;
+  }
+
+  async getProfileByUsername(username: string): Promise<{
+    username: string;
+    avatar: string | null;
+    timezone: string | null;
+    status: string;
+    createdAt: number;
+  } | null> {
+    const user = this.usersByUsername.get(username);
+    if (!user) return null;
+    return {
+      username: user.username,
+      avatar: user.avatar,
+      timezone: user.timezone,
+      status: user.status ?? "online",
+      createdAt: user.createdAt,
+    };
+  }
+
+  async getMessagesByIds(ids: number[]): Promise<MessageRow[]> {
+    const wanted = new Set(ids);
+    return this.messages.filter((m) => wanted.has(m.id));
+  }
+
+  async editMessage(messageId: number, userId: number, content: string): Promise<boolean> {
+    const m = this.messages.find((x) => x.id === messageId);
+    if (!m || m.senderId !== userId) return false;
+    this.messageEdits.push({ messageId, oldContent: m.content, editedAt: Date.now() });
+    m.content = content;
+    m.editedAt = Date.now();
+    return true;
+  }
+
+  async listMessageEdits(messageId: number): Promise<{ content: string; editedAt: number }[]> {
+    return this.messageEdits
+      .filter((e) => e.messageId === messageId)
+      .sort((a, b) => a.editedAt - b.editedAt)
+      .map((e) => ({ content: e.oldContent, editedAt: e.editedAt }));
+  }
+
+  async toggleReaction(
+    messageId: number,
+    userId: number,
+    username: string,
+    emoji: string
+  ): Promise<"added" | "removed"> {
+    if (!this.reactions.has(`${messageId}:${userId}:${emoji}`)) {
+      this.reactions.set(`${messageId}:${userId}:${emoji}`, {
+        messageId,
+        userId,
+        username,
+        emoji,
+        createdAt: Date.now(),
+      });
+      return "added";
+    }
+    this.reactions.delete(`${messageId}:${userId}:${emoji}`);
+    return "removed";
+  }
+
+  async listReactions(
+    messageIds: number[],
+    userId: number
+  ): Promise<{ messageId: number; emoji: string; count: number; mine: boolean }[]> {
+    const wanted = new Set(messageIds);
+    const byKey = new Map<string, { count: number; mine: boolean }>();
+    for (const r of this.reactions.values()) {
+      if (!wanted.has(r.messageId)) continue;
+      const key = `${r.messageId}:${r.emoji}`;
+      const e = byKey.get(key) ?? { count: 0, mine: false };
+      e.count += 1;
+      if (r.userId === userId) e.mine = true;
+      byKey.set(key, e);
+    }
+    return [...byKey.entries()].map(([key, e]) => {
+      const [messageId, emoji] = key.split(":");
+      return { messageId: Number(messageId), emoji, count: e.count, mine: e.mine };
+    });
+  }
+
   async getMessagePrivacy(userId: number): Promise<MessagePrivacy> {
     return this.usersById.get(userId)?.messagePrivacy ?? "everyone";
   }
@@ -1401,6 +1703,12 @@ class MemoryAuthStore implements AuthStore {
     this.messages.push(message);
     return message;
   }
+
+  private reactions = new Map<
+    string,
+    { messageId: number; userId: number; username: string; emoji: string; createdAt: number }
+  >();
+  private messageEdits: { messageId: number; oldContent: string; editedAt: number }[] = [];
 
   async consumeRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult> {
     const now = Date.now();

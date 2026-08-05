@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { safeJson } from "@/lib/safeJson";
 
 type Step = "credentials" | "totp";
 
@@ -23,7 +24,7 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, remember }),
       });
-      const data = (await res.json()) as { error?: string; requires2FA?: boolean };
+      const data = await safeJson<{ error?: string; requires2FA?: boolean }>(res);
       if (!res.ok) throw new Error(data.error || "Invalid credentials");
       if (data.requires2FA) {
         setTotpCode("");
@@ -48,7 +49,7 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: totpCode }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await safeJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error || "Invalid code");
       window.location.href = "/chat";
     } catch (err: unknown) {
@@ -59,7 +60,7 @@ export default function Login() {
   };
 
   const inputClass =
-    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition";
+    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-400/50 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] transition";
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-white px-4">
@@ -68,9 +69,11 @@ export default function Login() {
           ← Back to Aether
         </Link>
 
-        <div className="mt-4 bg-white/5 border border-white/10 rounded-2xl p-8 animate-in fade-in duration-700">
+        <div className="mt-4 glass rounded-3xl p-8 shadow-2xl shadow-indigo-950/30">
           <div className="text-center mb-6">
-            <div className="text-3xl font-serif italic font-bold text-white/90 mb-2">A</div>
+            <div className="mx-auto mb-3 w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center text-2xl font-serif italic font-bold shadow-lg shadow-indigo-950/50">
+              A
+            </div>
             <h1 className="text-2xl font-medium">
               {step === "totp" ? "Two-factor authentication" : "Log in to Aether"}
             </h1>
@@ -146,7 +149,7 @@ export default function Login() {
               <button
                 onClick={login}
                 disabled={loading || !email || !password}
-                className="w-full py-3 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition disabled:opacity-40"
+                className="btn-glow w-full py-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-600 text-white font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none"
               >
                 {loading ? "Logging in..." : "Log in"}
               </button>
@@ -169,7 +172,7 @@ export default function Login() {
               <button
                 onClick={verifyTotp}
                 disabled={loading || totpCode.length !== 6}
-                className="w-full py-3 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition disabled:opacity-40"
+                className="btn-glow w-full py-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-600 text-white font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none"
               >
                 {loading ? "Verifying..." : "Log in"}
               </button>

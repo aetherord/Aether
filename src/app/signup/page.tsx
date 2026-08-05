@@ -2,6 +2,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Turnstile from "@/components/Turnstile";
+import { safeJson } from "@/lib/safeJson";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -119,7 +120,7 @@ export default function Signup() {
           turnstileToken: cfToken ?? undefined,
         }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await safeJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error || "Failed to create account");
       setCode("");
       setStep("code");
@@ -139,7 +140,7 @@ export default function Signup() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, turnstileToken: cfToken ?? undefined }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await safeJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error || "Failed to resend code");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to resend code");
@@ -158,7 +159,7 @@ export default function Signup() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, code }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await safeJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error || "Invalid code");
       await startTwoFactorSetup();
       setStep("2fa");
@@ -174,11 +175,11 @@ export default function Signup() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
-    const data = (await res.json()) as {
+    const data = await safeJson<{
       error?: string;
       secret?: string;
       qrDataUrl?: string | null;
-    };
+    }>(res);
     if (!res.ok) throw new Error(data.error || "Failed to start 2FA setup");
     setSecret(data.secret ?? null);
     setQrDataUrl(data.qrDataUrl ?? null);
@@ -210,7 +211,7 @@ export default function Signup() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: totpCode }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = await safeJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(data.error || "Invalid code");
       setStep("done");
     } catch (err: unknown) {
@@ -221,11 +222,11 @@ export default function Signup() {
   };
 
   const inputClass =
-    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition";
+    "w-full px-4 py-3 bg-black/30 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-400/50 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] transition";
   const selectClass =
-    "w-full px-3 py-3 bg-black/30 border border-white/10 rounded-xl text-sm cursor-pointer focus:outline-none focus:border-white/30 transition";
+    "w-full px-3 py-3 bg-black/30 border border-white/10 rounded-xl text-sm cursor-pointer focus:outline-none focus:border-indigo-400/50 transition";
   const primaryBtn =
-    "w-full py-3 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition disabled:opacity-40";
+    "btn-glow w-full py-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-600 text-white font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none";
   const ghostBtn =
     "px-5 py-3 rounded-full border border-white/20 text-gray-300 hover:text-white hover:border-white/50 transition";
 
@@ -244,14 +245,16 @@ export default function Signup() {
           ← Back to Aether
         </Link>
 
-        <div className="mt-4 bg-white/5 border border-white/10 rounded-2xl p-8 animate-in fade-in duration-700">
+        <div className="mt-4 glass rounded-3xl p-8 shadow-2xl shadow-indigo-950/30">
           <div className="text-center mb-6">
-            <div className="text-3xl font-serif italic font-bold text-white/90 mb-2">A</div>
+            <div className="mx-auto mb-3 w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center text-2xl font-serif italic font-bold shadow-lg shadow-indigo-950/50">
+              A
+            </div>
             <h1 className="text-2xl font-medium">
               {step === "form" && "Create an account"}
               {step === "code" && "Check your email"}
               {step === "2fa" && "Set up two-factor authentication"}
-              {step === "done" && "You&apos;re in!"}
+              {step === "done" && "You're in!"}
             </h1>
             <p className="text-sm text-gray-400 mt-1">
               {step === "form" && "Join Aether. It takes a minute."}

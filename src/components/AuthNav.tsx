@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { safeJson } from "@/lib/safeJson";
 
 export default function AuthNav() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -9,7 +10,7 @@ export default function AuthNav() {
   useEffect(() => {
     let alive = true;
     fetch("/api/auth/session")
-      .then((r) => r.json() as Promise<{ authenticated?: boolean }>)
+      .then((r) => safeJson<{ authenticated?: boolean }>(r))
       .then((data) => {
         if (alive) setAuthed(Boolean(data.authenticated));
       })
