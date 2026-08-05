@@ -32,6 +32,7 @@ export async function POST(req: Request) {
 
     const identifier = (typeof body.email === "string" ? body.email : "").trim();
     const password = typeof body.password === "string" ? body.password : "";
+    const remember = body.remember !== false; // default: remember
     if ((!identifier || (!isValidEmail(identifier) && !isValidUsername(identifier))) || !password) {
       return jsonError("Invalid credentials", 400);
     }
@@ -62,6 +63,7 @@ export async function POST(req: Request) {
       await store.createPending({
         tokenHash: hashToken(pendingToken),
         email: user.email,
+        remember,
         expiresAt: Date.now() + PENDING_TTL_MS,
         createdAt: Date.now(),
       });
@@ -70,9 +72,9 @@ export async function POST(req: Request) {
       return res;
     }
 
-    const sessionToken = await issueSession(store, user);
+    const sessionToken = await issueSession(store, user, remember);
     const res = jsonOk({ requires2FA: false });
-    setSessionCookie(res, sessionToken);
+    setSessionCookie(res, sessionToken, remember);
     return res;
   } catch (err) {
     return handleApiError(err);

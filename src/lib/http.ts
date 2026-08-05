@@ -9,7 +9,8 @@ export const MAX_BODY_BYTES = 4096;
 export const SESSION_COOKIE = "aether_session";
 export const PENDING_COOKIE = "aether_pending";
 
-const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days (remember me)
+const SESSION_TTL_NO_REMEMBER_SECONDS = 24 * 60 * 60; // 24h (private session)
 const PENDING_TTL_SECONDS = 10 * 60; // 10 minutes
 
 const isProd = process.env.NODE_ENV === "production";
@@ -125,8 +126,18 @@ function cookieOptions(maxAge: number) {
   };
 }
 
-export function setSessionCookie(res: NextResponse, token: string): void {
-  res.cookies.set(SESSION_COOKIE, token, cookieOptions(SESSION_TTL_SECONDS));
+/**
+ * Sets the session cookie. `remember` controls persistence: checked → 30-day
+ * cookie; unchecked → session-scoped (dies with the browser) with a 24h cap.
+ */
+export function setSessionCookie(res: NextResponse, token: string, remember = true): void {
+  res.cookies.set(
+    SESSION_COOKIE,
+    token,
+    remember
+      ? cookieOptions(SESSION_TTL_SECONDS)
+      : { ...cookieOptions(SESSION_TTL_NO_REMEMBER_SECONDS), maxAge: undefined }
+  );
 }
 
 export function setPendingCookie(res: NextResponse, token: string): void {

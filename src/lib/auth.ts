@@ -17,7 +17,8 @@ import { getStore, type AuthStore, type SessionRow, type UserRow } from "./store
 
 export const CODE_TTL_MS = 10 * 60 * 1000; // verification codes: 10 minutes
 export const PENDING_TTL_MS = 10 * 60 * 1000; // pending-2FA login step: 10 minutes
-export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // sessions: 30 days
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // "remember me" sessions: 30 days
+export const SESSION_TTL_NO_REMEMBER_MS = 24 * 60 * 60 * 1000; // private sessions: 24 hours
 export const SESSION_ROTATE_MS = 24 * 60 * 60 * 1000; // rotate cookies older than 24h
 export const MAX_CODE_ATTEMPTS = 5; // wrong guesses before a code is invalidated
 
@@ -192,14 +193,20 @@ export function verifyTotp(secret: string, token: string): boolean {
 
 /* ── sessions ─────────────────────────────────────────────────────────────── */
 
-export async function issueSession(store: AuthStore, user: UserRow): Promise<string> {
+/**
+ * Issues a session. With `remember` set the session lasts SESSION_TTL_MS
+ * (30 days, browser cookie); without it the session lasts 24 hours and the
+ * cookie is session-scoped so it dies when the browser closes.
+ */
+export async function issueSession(store: AuthStore, user: UserRow, remember = true): Promise<string> {
   const token = generateToken();
   const now = Date.now();
   await store.createSession({
     tokenHash: hashToken(token),
     userId: user.id,
     email: user.email,
-    expiresAt: now + SESSION_TTL_MS,
+    remember,
+    expiresAt: now + (remember ? SESSION_TTL_MS : SESSION_TTL_NO_REMEMBER_MS),
     createdAt: now,
     lastUsedAt: now,
   });

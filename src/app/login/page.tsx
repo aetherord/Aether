@@ -9,6 +9,7 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -20,7 +21,7 @@ export default function Login() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, remember }),
       });
       const data = (await res.json()) as { error?: string; requires2FA?: boolean };
       if (!res.ok) throw new Error(data.error || "Invalid credentials");
@@ -91,15 +92,57 @@ export default function Login() {
                 autoComplete="username"
                 className={inputClass}
               />
-              <input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && login()}
-                autoComplete="current-password"
-                className={inputClass}
-              />
+              <div className="relative">
+                <input
+                  type="password"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && login()}
+                  autoComplete="current-password"
+                  className={inputClass}
+                />
+                <Link
+                  href="/forgot-password"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-white transition-colors"
+                >
+                  Forgot?
+                </Link>
+              </div>
+
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={remember}
+                onClick={() => setRemember(!remember)}
+                className="group flex w-full items-center gap-2.5 text-left cursor-pointer select-none"
+              >
+                <span
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                    remember
+                      ? "border-white bg-white shadow-[0_0_12px_rgba(255,255,255,0.35)]"
+                      : "border-white/25 bg-black/30 group-hover:border-white/50 group-hover:bg-white/5 group-active:scale-90"
+                  }`}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#0a0a0a"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                      remember ? "scale-100" : "scale-0"
+                    }`}
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                </span>
+                <span className="text-sm text-gray-300 transition-colors group-hover:text-gray-200">
+                  Remember me for 30 days
+                </span>
+              </button>
+
               <button
                 onClick={login}
                 disabled={loading || !email || !password}

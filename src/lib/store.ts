@@ -46,6 +46,7 @@ export interface SessionRow {
   tokenHash: string;
   userId: number;
   email: string;
+  remember: boolean;
   expiresAt: number;
   createdAt: number;
   lastUsedAt: number;
@@ -54,6 +55,7 @@ export interface SessionRow {
 export interface PendingRow {
   tokenHash: string;
   email: string;
+  remember: boolean;
   expiresAt: number;
   createdAt: number;
 }
@@ -125,9 +127,12 @@ export interface AuthStore {
   touchSession(tokenHash: string): Promise<void>;
   rotateSession(oldHash: string, row: SessionRow): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;
+  deleteUserSessions(userId: number): Promise<void>;
   createPending(row: PendingRow): Promise<void>;
   getPending(tokenHash: string): Promise<PendingRow | null>;
   deletePending(tokenHash: string): Promise<void>;
+  deleteUserPendings(email: string): Promise<void>;
+  updatePassword(userId: number, passwordHash: string): Promise<void>;
   listMessages(room: ChatRoom, beforeId: number | null, limit: number): Promise<MessageRow[]>;
   listMessagesAfter(lastId: number, room: ChatRoom, limit: number): Promise<MessageRow[]>;
   listConversations(username: string): Promise<ConversationRow[]>;
@@ -189,6 +194,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL,
   email TEXT NOT NULL,
+  remember INTEGER NOT NULL DEFAULT 1,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   last_used_at INTEGER NOT NULL
@@ -198,6 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE TABLE IF NOT EXISTS pending_2fa (
   token_hash TEXT PRIMARY KEY,
   email TEXT NOT NULL,
+  remember INTEGER NOT NULL DEFAULT 1,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -308,6 +315,18 @@ class D1AuthStore implements AuthStore {
       if (!msgExisting.has(column)) {
         await this.db.exec(`ALTER TABLE messages ADD COLUMN ${column} ${definition}`);
       }
+    }
+
+    // Migration: remember flag on sessions + pending_2fa (added later).
+    const sessionCols = await this.db.prepare("SELECT name FROM pragma_table_info('sessions')").all();
+    const sessionExisting = new Set((sessionCols.results as { name: string }[]).map((c) => c.name));
+    if (!sessionExisting.has("remember")) {
+      await this.db.exec("ALTER TABLE sessions ADD COLUMN remember INTEGER NOT NULL DEFAULT 1");
+    }
+    const pendingCols = await this.db.prepare("SELECT name FROM pragma_table_info('pending_2fa')").all();
+    const pendingExisting = new Set((pendingCols.results as { name: string }[]).map((c) => c.name));
+    if (!pendingExisting.has("remember")) {
+      await this.db.exec("ALTER TABLE pending_2fa ADD COLUMN remember INTEGER NOT NULL DEFAULT 1");
     }
 
     const now = Date.now();
@@ -477,15 +496,15 @@ class D1AuthStore implements AuthStore {
   async createSession(row: SessionRow): Promise<void> {
     await this.db
       .prepare(
-        "INSERT OR REPLACE INTO sessions (token_hash, user_id, email, expires_at, created_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+        "INSERT OR REPLACE INTO sessions (token_hash, user_id, email, remember, expires_at, created_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
       )
-      .bind(row.tokenHash, row.userId, row.email, row.expiresAt, row.createdAt, row.lastUsedAt)
+      .bind(row.tokenHash, row.userId, row.email, row.remember ? 1 : 0, row.expiresAt, row.createdAt, row.lastUsedAt)
       .run();
   }
 
   async getSession(tokenHash: string): Promise<SessionRow | null> {
     const row = await this.db
-      .prepare("SELECT token_hash, user_id, email, expires_at, created_at, last_used_at FROM sessions WHERE token_hash = ?1")
+      .prepare("SELECT token_hash, user_id, email, remember, expires_at, created_at, last_used_at FROM sessions WHERE token_hash = ?1")
       .bind(tokenHash)
       .first();
     if (!row) return null;
@@ -493,6 +512,7 @@ class D1AuthStore implements AuthStore {
       tokenHash: String(row.token_hash),
       userId: Number(row.user_id),
       email: String(row.email),
+      remember: Number(row.remember) === 1,
       expiresAt: Number(row.expires_at),
       createdAt: Number(row.created_at),
       lastUsedAt: Number(row.last_used_at),
@@ -510,9 +530,9 @@ class D1AuthStore implements AuthStore {
     await this.db.batch([
       this.db
         .prepare(
-          "INSERT OR REPLACE INTO sessions (token_hash, user_id, email, expires_at, created_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+          "INSERT OR REPLACE INTO sessions (token_hash, user_id, email, remember, expires_at, created_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
         )
-        .bind(row.tokenHash, row.userId, row.email, row.expiresAt, row.createdAt, row.lastUsedAt),
+        .bind(row.tokenHash, row.userId, row.email, row.remember ? 1 : 0, row.expiresAt, row.createdAt, row.lastUsedAt),
       this.db.prepare("DELETE FROM sessions WHERE token_hash = ?1").bind(oldHash),
     ]);
   }
@@ -521,22 +541,27 @@ class D1AuthStore implements AuthStore {
     await this.db.prepare("DELETE FROM sessions WHERE token_hash = ?1").bind(tokenHash).run();
   }
 
+  async deleteUserSessions(userId: number): Promise<void> {
+    await this.db.prepare("DELETE FROM sessions WHERE user_id = ?1").bind(userId).run();
+  }
+
   async createPending(row: PendingRow): Promise<void> {
     await this.db
-      .prepare("INSERT OR REPLACE INTO pending_2fa (token_hash, email, expires_at, created_at) VALUES (?1, ?2, ?3, ?4)")
-      .bind(row.tokenHash, row.email, row.expiresAt, row.createdAt)
+      .prepare("INSERT OR REPLACE INTO pending_2fa (token_hash, email, remember, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+      .bind(row.tokenHash, row.email, row.remember ? 1 : 0, row.expiresAt, row.createdAt)
       .run();
   }
 
   async getPending(tokenHash: string): Promise<PendingRow | null> {
     const row = await this.db
-      .prepare("SELECT token_hash, email, expires_at, created_at FROM pending_2fa WHERE token_hash = ?1")
+      .prepare("SELECT token_hash, email, remember, expires_at, created_at FROM pending_2fa WHERE token_hash = ?1")
       .bind(tokenHash)
       .first();
     if (!row) return null;
     return {
       tokenHash: String(row.token_hash),
       email: String(row.email),
+      remember: Number(row.remember) === 1,
       expiresAt: Number(row.expires_at),
       createdAt: Number(row.created_at),
     };
@@ -544,6 +569,14 @@ class D1AuthStore implements AuthStore {
 
   async deletePending(tokenHash: string): Promise<void> {
     await this.db.prepare("DELETE FROM pending_2fa WHERE token_hash = ?1").bind(tokenHash).run();
+  }
+
+  async deleteUserPendings(email: string): Promise<void> {
+    await this.db.prepare("DELETE FROM pending_2fa WHERE email = ?1").bind(email).run();
+  }
+
+  async updatePassword(userId: number, passwordHash: string): Promise<void> {
+    await this.db.prepare("UPDATE users SET password_hash = ?2 WHERE id = ?1").bind(userId, passwordHash).run();
   }
 
   /** Builds the room WHERE clause with positional placeholders starting at ?1. */
@@ -861,6 +894,17 @@ class MemoryAuthStore implements AuthStore {
     this.sessions.delete(tokenHash);
   }
 
+  async deleteUserSessions(userId: number): Promise<void> {
+    for (const [hash, row] of this.sessions) {
+      if (row.userId === userId) this.sessions.delete(hash);
+    }
+  }
+
+  async updatePassword(userId: number, passwordHash: string): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) user.passwordHash = passwordHash;
+  }
+
   async createPending(row: PendingRow): Promise<void> {
     this.pendings.set(row.tokenHash, row);
   }
@@ -871,6 +915,12 @@ class MemoryAuthStore implements AuthStore {
 
   async deletePending(tokenHash: string): Promise<void> {
     this.pendings.delete(tokenHash);
+  }
+
+  async deleteUserPendings(email: string): Promise<void> {
+    for (const [hash, row] of this.pendings) {
+      if (row.email === email) this.pendings.delete(hash);
+    }
   }
 
   private static inRoom(m: MessageRow, room: ChatRoom): boolean {

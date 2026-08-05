@@ -1,4 +1,4 @@
-import { SESSION_ROTATE_MS, SESSION_TTL_MS } from "@/lib/auth";
+import { SESSION_ROTATE_MS, SESSION_TTL_MS, SESSION_TTL_NO_REMEMBER_MS } from "@/lib/auth";
 import { generateToken, hashToken } from "@/lib/crypto";
 import {
   clearAuthCookies,
@@ -48,11 +48,12 @@ export async function GET(req: Request) {
         tokenHash: hashToken(newToken),
         userId: user.id,
         email: user.email,
-        expiresAt: now + SESSION_TTL_MS,
+        remember: row.remember !== false,
+        expiresAt: now + (row.remember !== false ? SESSION_TTL_MS : SESSION_TTL_NO_REMEMBER_MS),
         createdAt: now,
         lastUsedAt: now,
       });
-      setSessionCookie(res, newToken);
+      setSessionCookie(res, newToken, row.remember !== false);
     }
 
     return res;

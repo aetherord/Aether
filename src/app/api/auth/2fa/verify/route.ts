@@ -55,11 +55,12 @@ export async function POST(req: Request) {
       return jsonError("Invalid 2FA code", 401);
     }
 
+    const remember = pending.remember !== false;
     await store.deletePending(pending.tokenHash);
 
-    const sessionToken = await issueSession(store, user);
+    const sessionToken = await issueSession(store, user, remember);
     const res = jsonOk();
-    setSessionCookie(res, sessionToken);
+    setSessionCookie(res, sessionToken, remember);
     return res;
   } catch (err) {
     return handleApiError(err);
