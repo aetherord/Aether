@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import VideoPlayer from "@/components/VideoPlayer";
 
 interface Message {
   id: number;
@@ -30,7 +31,7 @@ interface SessionUser {
   role?: "user" | "admin";
 }
 
-type Room = { kind: "community" } | { kind: "dm"; peer: string };
+type Room = { kind: "dm"; peer: string } | null;
 
 const POLL_MS = 4000;
 
@@ -113,7 +114,7 @@ export default function Chat() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [room, setRoom] = useState<Room>({ kind: "community" });
+  const [room, setRoom] = useState<Room>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -201,7 +202,7 @@ export default function Chat() {
     async (before: number | null = null, append = false) => {
       try {
         const params = new URLSearchParams();
-        if (room.kind === "dm") {
+        if (room) {
           params.set("room", "dm");
           params.set("peer", room.peer);
         }
@@ -229,6 +230,13 @@ export default function Chat() {
   // Live updates via SSE per room; falls back to polling when the stream is down.
   useEffect(() => {
     if (checking) return;
+    // No room open yet — don't load the community channel behind the scenes.
+    if (!room) {
+      setMessages([]);
+      setHasMore(false);
+      setConnected(false);
+      return;
+    }
     setMessages([]);
     setHasMore(false);
     setBrokenMedia(new Set());
@@ -252,7 +260,7 @@ export default function Chat() {
       if (stopped) return;
       try {
         const params = new URLSearchParams();
-        if (room.kind === "dm") {
+        if (room) {
           params.set("room", "dm");
           params.set("peer", room.peer);
         }
@@ -309,7 +317,7 @@ export default function Chat() {
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     setScrollLocked(nearBottom);
     // Load older messages when the user scrolls near the top.
-    const roomKey = room.kind === "community" ? "community" : `dm:${room.peer}`;
+    const roomKey = room ? `dm:${room.peer}` : "none";
     if (
       el.scrollTop < 80 &&
       hasMore &&
@@ -344,7 +352,7 @@ export default function Chat() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content,
-          recipient: room.kind === "dm" ? room.peer : undefined,
+          recipient: room ? room.peer : undefined,
         }),
       });
       const data = (await res.json()) as { error?: string };
@@ -366,7 +374,7 @@ export default function Chat() {
       const file = await compressImage(raw);
       const form = new FormData();
       form.append("file", file);
-      if (room.kind === "dm") form.append("recipient", room.peer);
+      if (room) form.append("recipient", room.peer);
       const up = await fetch("/api/media/upload", { method: "POST", body: form });
       const upData = (await up.json()) as { error?: string; mediaRef?: string; mime?: string };
       if (!up.ok) throw new Error(upData.error || "Upload failed");
@@ -376,7 +384,7 @@ export default function Chat() {
         body: JSON.stringify({
           mediaRef: upData.mediaRef,
           mediaMime: upData.mime,
-          recipient: room.kind === "dm" ? room.peer : undefined,
+          recipient: room ? room.peer : undefined,
         }),
       });
       const data = (await res.json()) as { error?: string };
@@ -396,10 +404,14 @@ export default function Chat() {
       setSearchResults(null);
       return;
     }
+    if (!room) {
+      setSearchResults([]);
+      return;
+    }
     setSearching(true);
     try {
       const params = new URLSearchParams({ q: query });
-      if (room.kind === "dm") {
+      if (room) {
         params.set("room", "dm");
         params.set("peer", room.peer);
       }
@@ -539,9 +551,8 @@ export default function Chat() {
     return out;
   }, [messages]);
 
-  const roomTitle = room.kind === "community" ? "Aether Community" : room.peer;
-  const roomSubtitle =
-    room.kind === "community" ? "Everyone" : "Direct message";
+  const roomTitle = room ? room.peer : "Messages";
+  const roomSubtitle = room ? "Direct message" : "Pick a friend to start chatting";
 
   if (checking) {
     return (
@@ -570,23 +581,6 @@ export default function Chat() {
             ⌂
           </Link>
         </div>
-
-        <button
-          onClick={() => {
-            setRoom({ kind: "community" });
-            setSearchOpen(false);
-            setSearchResults(null);
-          }}
-          className={`mx-2 px-3 py-2 rounded-xl text-left text-sm flex items-center gap-2.5 transition ${
-            room.kind === "community" && !searchOpen
-              ? "bg-white/10 text-white"
-              : "text-gray-400 hover:bg-white/5 hover:text-white"
-          }`}
-        >
-          <span className="text-base">#</span>
-          <span className="font-medium">Community</span>
-          {connected && <span className="ml-auto h-2 w-2 rounded-full bg-emerald-400" />}
-        </button>
 
         <button
           onClick={() => {
@@ -660,7 +654,7 @@ export default function Chat() {
             </div>
           ))}
           {friends.map((f) => {
-            const active = room.kind === "dm" && room.peer === f.username;
+            const active = room?.kind === "dm" && room.peer === f.username;
             return (
               <button
                 key={f.id}
@@ -710,7 +704,7 @@ export default function Chat() {
             </p>
           )}
           {conversations.map((c) => {
-            const active = room.kind === "dm" && room.peer === c.peer;
+            const active = room?.kind === "dm" && room.peer === c.peer;
             return (
               <button
                 key={c.peer}
@@ -763,7 +757,7 @@ export default function Chat() {
         <header className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#0d0d0f]/90 backdrop-blur z-10">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-white/20 to-white/5 border border-white/10 flex items-center justify-center text-lg font-serif italic font-bold shrink-0">
-              {room.kind === "dm" ? (
+              {room ? (
                 <span className={`bg-gradient-to-br ${avatarGradient(room.peer)} w-full h-full rounded-full flex items-center justify-center text-xs font-sans font-bold`}>
                   {room.peer.slice(0, 1).toUpperCase()}
                 </span>
@@ -851,12 +845,12 @@ export default function Chat() {
                 {messages.length === 0 && (
                   <div className="text-center pt-24 animate-in fade-in duration-500">
                     <div className="w-14 h-14 mx-auto rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-2xl mb-4">
-                      {room.kind === "dm" ? "💬" : "👋"}
+                      💬
                     </div>
                     <p className="text-gray-400 text-sm">
-                      {room.kind === "dm"
+                      {room
                         ? `Say hello to ${room.peer} — it's all Aether in here.`
-                        : "No messages yet. Say hello — it's all Aether in here."}
+                        : "No conversation open — pick a friend from the sidebar to start chatting."}
                     </p>
                   </div>
                 )}
@@ -910,15 +904,12 @@ export default function Chat() {
                             </div>
                           ) : m.mediaRef ? (
                             isVideo(m.mediaMime) ? (
-                              <video
+                              <VideoPlayer
                                 src={`/api/media/${m.mediaRef}`}
-                                controls
-                                preload="metadata"
-                                playsInline
+                                className="-mx-1 my-1 max-w-[26rem]"
                                 onError={() =>
                                   setBrokenMedia((prev) => new Set(prev).add(m.mediaRef!))
                                 }
-                                className="max-w-full max-h-80 rounded-xl -mx-1 my-1"
                               />
                             ) : (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -1024,7 +1015,12 @@ export default function Chat() {
         )}
 
         {/* Composer */}
-        <div className="border-t border-white/10 p-3 sm:p-4 bg-[#0d0d0f]/90 backdrop-blur">
+        <div className={`border-t border-white/10 p-3 sm:p-4 bg-[#0d0d0f]/90 backdrop-blur ${room ? "" : "opacity-60"}`}>
+          {!room && (
+            <p className="max-w-2xl mx-auto pb-2 text-xs text-gray-500">
+              Select a friend from the sidebar to send messages.
+            </p>
+          )}
           <div className="max-w-2xl w-full mx-auto flex items-center gap-2.5">
             <input
               ref={fileRef}
@@ -1038,7 +1034,7 @@ export default function Chat() {
             />
             <button
               onClick={() => fileRef.current?.click()}
-              disabled={uploading}
+              disabled={uploading || !room}
               title="Send an image or video (or paste / drag & drop)"
               className="shrink-0 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition flex items-center justify-center text-lg disabled:opacity-40 disabled:active:scale-100"
             >
@@ -1065,7 +1061,7 @@ export default function Chat() {
                     void sendMedia(file);
                   }
                 }}
-                placeholder={`Message ${roomTitle}…`}
+                placeholder={room ? `Message ${room.peer}…` : "Select a friend to start…"}
                 className="w-full px-4 py-3 pr-12 bg-white/5 border border-white/10 rounded-full text-white placeholder-gray-500 focus:outline-none focus:border-white/30 focus:bg-white/8 transition"
                 maxLength={4000}
               />
@@ -1075,7 +1071,7 @@ export default function Chat() {
             </div>
             <button
               onClick={sendText}
-              disabled={sending || !draft.trim()}
+              disabled={sending || !draft.trim() || !room}
               className="shrink-0 px-5 sm:px-6 py-3 rounded-full bg-white text-black font-medium hover:bg-gray-200 active:scale-95 transition disabled:opacity-40 disabled:active:scale-100"
             >
               Send

@@ -47,11 +47,10 @@ export async function POST(req: Request) {
       return jsonError("Invalid code", 400);
     }
 
-    await store.enableTotp(user.id);
-
-    // Generate a fresh set of backup codes — shown exactly once, then only
-    // their hashes live in the DB.
+    // Generate the backup codes BEFORE flipping 2FA on, so a failure here
+    // can't leave the account with 2FA enabled but zero usable codes.
     const backupCodes = await store.generateBackupCodes(user.id, 10);
+    await store.enableTotp(user.id);
     return jsonOk({ backupCodes });
   } catch (err) {
     return handleApiError(err);

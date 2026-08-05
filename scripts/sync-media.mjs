@@ -20,11 +20,11 @@
  *   TURSO_AUTH_TOKEN       required
  *   MEDIA_ROOT             default: D:\Aether-Images-and-media
  *   MEDIA_MAX_GB           default: 80  (hard cap on the archive size)
- *   MEDIA_PURGE_AFTER_SYNC default "true": after an item is safely written
- *                          to the local drive, its cloud copy is DELETED
- *                          from Turso (the web chat then shows an
- *                          "archived to local drive" placeholder). Set to
- *                          "false" to keep a cloud copy for chat.
+ *   MEDIA_PURGE_AFTER_SYNC default "false": the cloud copy is kept after a
+ *                          safe local write so the web chat can always view
+ *                          it. Set to "true" to DELETE it from Turso (the
+ *                          web chat then shows an "archived to local drive"
+ *                          placeholder).
  */
 
 import { access, mkdir, readdir, stat, writeFile } from "node:fs/promises";
@@ -34,7 +34,9 @@ import { join, basename, sep } from "node:path";
 
 const ROOT = process.env.MEDIA_ROOT || "D:\\Aether-Images-and-media";
 const MAX_GB = Number(process.env.MEDIA_MAX_GB || 80);
-const PURGE = (process.env.MEDIA_PURGE_AFTER_SYNC || "true").toLowerCase() !== "false";
+// Keep cloud copies by default so synced media stays viewable in the web chat;
+// set MEDIA_PURGE_AFTER_SYNC=true to delete from Turso after a safe write.
+const PURGE = (process.env.MEDIA_PURGE_AFTER_SYNC || "false").toLowerCase() === "true";
 const MAX_BYTES = MAX_GB * 1024 * 1024 * 1024;
 
 const TURSO_URL = process.env.TURSO_URL;
