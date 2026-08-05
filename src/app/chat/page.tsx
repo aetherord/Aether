@@ -4,6 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import VideoPlayer from "@/components/VideoPlayer";
+import {
+  ArchiveIcon,
+  ChatIcon,
+  CheckIcon,
+  DotsIcon,
+  FlagIcon,
+  HomeIcon,
+  PaperclipIcon,
+  PlusIcon,
+  SearchIcon,
+  XIcon,
+} from "@/components/icons";
 
 interface Message {
   id: number;
@@ -575,10 +587,10 @@ export default function Chat() {
           </div>
           <Link
             href="/"
-            className="text-xs text-gray-500 hover:text-white transition-colors"
+            className="text-gray-500 hover:text-white transition-colors p-1 rounded"
             title="Home"
           >
-            ⌂
+            <HomeIcon size={16} />
           </Link>
         </div>
 
@@ -591,7 +603,7 @@ export default function Chat() {
             searchOpen ? "bg-white/10 text-white" : "text-gray-400 hover:bg-white/5 hover:text-white"
           }`}
         >
-          <span className="text-base">⌕</span>
+          <SearchIcon size={15} />
           <span className="font-medium">Search</span>
         </button>
 
@@ -618,9 +630,9 @@ export default function Chat() {
           <button
             onClick={() => setFriendModal(true)}
             title="Add a friend"
-            className="text-gray-500 hover:text-white transition-colors text-sm leading-none"
+            className="text-gray-500 hover:text-white transition-colors leading-none"
           >
-            ＋
+            <PlusIcon size={14} />
           </button>
         </div>
         <div className="overflow-y-auto pb-1 max-h-44 shrink-0">
@@ -640,16 +652,16 @@ export default function Chat() {
               <button
                 onClick={() => void respondFriend(r.username, true)}
                 title="Accept"
-                className="text-emerald-400 hover:text-emerald-300 transition"
+                className="text-emerald-400 hover:text-emerald-300 transition p-0.5"
               >
-                ✓
+                <CheckIcon size={13} />
               </button>
               <button
                 onClick={() => void respondFriend(r.username, false)}
                 title="Decline"
-                className="text-red-400 hover:text-red-300 transition"
+                className="text-red-400 hover:text-red-300 transition p-0.5"
               >
-                ✕
+                <XIcon size={13} />
               </button>
             </div>
           ))}
@@ -728,7 +740,14 @@ export default function Chat() {
                   <div className="text-xs font-medium truncate">{c.peer}</div>
                   <div className="text-[11px] text-gray-500 truncate">
                     {c.lastSender === user?.username ? "You: " : ""}
-                    {c.mediaRef ? "📎 Media" : c.content || ""}
+                    {c.mediaRef ? (
+                      <span className="inline-flex items-center gap-1">
+                        <PaperclipIcon size={11} />
+                        Media
+                      </span>
+                    ) : (
+                      c.content || ""
+                    )}
                   </div>
                 </div>
               </button>
@@ -751,8 +770,11 @@ export default function Chat() {
         </div>
       </aside>
 
-      {/* Main column */}
+      {/* Main column — stays blank until a conversation is opened */}
       <div className="flex-1 flex flex-col min-w-0">
+        {!room && <div className="flex-1" aria-hidden />}
+        {room && (
+          <>
         {/* Header */}
         <header className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#0d0d0f]/90 backdrop-blur z-10">
           <div className="flex items-center gap-3 min-w-0">
@@ -823,7 +845,15 @@ export default function Chat() {
                         {dayLabel(m.createdAt)} {timeLabel(m.createdAt)}
                       </div>
                       <div className={`text-sm ${mine ? "text-emerald-300/90" : "text-gray-200"}`}>
-                        {m.content || (m.mediaRef ? "📎 Media" : "")}
+                        {m.content ||
+                          (m.mediaRef ? (
+                            <span className="inline-flex items-center gap-1">
+                              <PaperclipIcon size={11} />
+                              Media
+                            </span>
+                          ) : (
+                            ""
+                          ))}
                       </div>
                     </div>
                   );
@@ -844,13 +874,11 @@ export default function Chat() {
                 )}
                 {messages.length === 0 && (
                   <div className="text-center pt-24 animate-in fade-in duration-500">
-                    <div className="w-14 h-14 mx-auto rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-2xl mb-4">
-                      💬
+                    <div className="w-14 h-14 mx-auto rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mb-4">
+                      <ChatIcon size={24} className="text-gray-500" />
                     </div>
                     <p className="text-gray-400 text-sm">
-                      {room
-                        ? `Say hello to ${room.peer} — it's all Aether in here.`
-                        : "No conversation open — pick a friend from the sidebar to start chatting."}
+                      Say hello to {room.peer} — it&apos;s all Aether in here.
                     </p>
                   </div>
                 )}
@@ -899,7 +927,7 @@ export default function Chat() {
                         >
                           {m.mediaRef && brokenMedia.has(m.mediaRef) ? (
                             <div className="flex items-center gap-2 rounded-lg border border-dashed border-white/15 bg-black/20 px-3 py-2 text-xs text-gray-400 -mx-1 my-1">
-                              <span>📦</span>
+                              <ArchiveIcon size={14} />
                               <span>Archived to the local media drive</span>
                             </div>
                           ) : m.mediaRef ? (
@@ -947,7 +975,7 @@ export default function Chat() {
                             className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
                             title="Message"
                           >
-                            💬
+                            <ChatIcon size={13} />
                           </button>
                           <button
                             onClick={() => {
@@ -957,7 +985,7 @@ export default function Chat() {
                             className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
                             title="Report"
                           >
-                            ⚑
+                            <FlagIcon size={13} />
                           </button>
                           {user?.role === "admin" && (
                             <button
@@ -965,7 +993,7 @@ export default function Chat() {
                               className="px-2 py-1 rounded-lg bg-red-500/20 border border-red-500/30 hover:bg-red-500/40 transition"
                               title="Delete (admin)"
                             >
-                              ✕
+                              <XIcon size={13} />
                             </button>
                           )}
                           {!showActions && (
@@ -974,7 +1002,7 @@ export default function Chat() {
                               className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
                               title="More"
                             >
-                              ⋯
+                              <DotsIcon size={13} />
                             </button>
                           )}
                           {showActions && (
@@ -983,7 +1011,7 @@ export default function Chat() {
                               className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
                               title="Close"
                             >
-                              ✕
+                              <XIcon size={13} />
                             </button>
                           )}
                         </div>
@@ -1015,12 +1043,7 @@ export default function Chat() {
         )}
 
         {/* Composer */}
-        <div className={`border-t border-white/10 p-3 sm:p-4 bg-[#0d0d0f]/90 backdrop-blur ${room ? "" : "opacity-60"}`}>
-          {!room && (
-            <p className="max-w-2xl mx-auto pb-2 text-xs text-gray-500">
-              Select a friend from the sidebar to send messages.
-            </p>
-          )}
+        <div className="border-t border-white/10 p-3 sm:p-4 bg-[#0d0d0f]/90 backdrop-blur">
           <div className="max-w-2xl w-full mx-auto flex items-center gap-2.5">
             <input
               ref={fileRef}
@@ -1034,7 +1057,7 @@ export default function Chat() {
             />
             <button
               onClick={() => fileRef.current?.click()}
-              disabled={uploading || !room}
+              disabled={uploading}
               title="Send an image or video (or paste / drag & drop)"
               className="shrink-0 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition flex items-center justify-center text-lg disabled:opacity-40 disabled:active:scale-100"
             >
@@ -1061,7 +1084,7 @@ export default function Chat() {
                     void sendMedia(file);
                   }
                 }}
-                placeholder={room ? `Message ${room.peer}…` : "Select a friend to start…"}
+                placeholder={`Message ${room.peer}…`}
                 className="w-full px-4 py-3 pr-12 bg-white/5 border border-white/10 rounded-full text-white placeholder-gray-500 focus:outline-none focus:border-white/30 focus:bg-white/8 transition"
                 maxLength={4000}
               />
@@ -1071,13 +1094,15 @@ export default function Chat() {
             </div>
             <button
               onClick={sendText}
-              disabled={sending || !draft.trim() || !room}
+              disabled={sending || !draft.trim()}
               className="shrink-0 px-5 sm:px-6 py-3 rounded-full bg-white text-black font-medium hover:bg-gray-200 active:scale-95 transition disabled:opacity-40 disabled:active:scale-100"
             >
               Send
             </button>
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {/* Add friend modal */}
