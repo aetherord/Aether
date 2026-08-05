@@ -58,3 +58,6 @@ next-env.d.ts
 
 
 !.dev.vars.example
+
+# media sync log
+sync-media.log

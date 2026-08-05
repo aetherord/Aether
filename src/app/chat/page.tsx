@@ -58,7 +58,9 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [connected, setConnected] = useState(true);
+  const [live, setLive] = useState(false); // true when the SSE stream is up
   const [scrollLocked, setScrollLocked] = useState(true);
+  const [brokenMedia, setBrokenMedia] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -104,11 +106,68 @@ export default function Chat() {
     }
   }, [router]);
 
+  // Live updates via SSE; falls back to 4s polling when the stream is down.
   useEffect(() => {
     if (checking) return;
     loadMessages();
-    const timer = setInterval(loadMessages, POLL_MS);
-    return () => clearInterval(timer);
+
+    let es: EventSource | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let stopped = false;
+
+    const stopPolling = () => {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+    const startPolling = () => {
+      if (!pollTimer) pollTimer = setInterval(loadMessages, POLL_MS);
+    };
+
+    const connect = () => {
+      if (stopped) return;
+      try {
+        es = new EventSource("/api/chat/stream");
+        es.onopen = () => {
+          if (stopped) return;
+          setLive(true);
+          setConnected(true);
+          stopPolling();
+        };
+        es.onmessage = (ev) => {
+          if (stopped) return;
+          try {
+            const m = JSON.parse(ev.data) as Message;
+            setMessages((prev) => {
+              if (prev.some((p) => p.id === m.id)) return prev;
+              return [...prev, m];
+            });
+            setConnected(true);
+          } catch {
+            /* ignore malformed frames */
+          }
+        };
+        es.onerror = () => {
+          if (stopped) return;
+          // Do NOT call es.close() here — that would kill the browser's
+          // automatic reconnection. Instead drop into polling; when the
+          // stream comes back, onopen fires again and polling stops.
+          setLive(false);
+          setConnected(false);
+          startPolling();
+        };
+      } catch {
+        startPolling();
+      }
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      es?.close();
+      stopPolling();
+    };
   }, [checking, loadMessages]);
 
   // Keep the view pinned to the bottom when the user hasn't scrolled up.
@@ -214,7 +273,7 @@ export default function Chat() {
                 className={`inline-block h-2 w-2 rounded-full ${connected ? "bg-emerald-400" : "bg-red-400"}`}
               />
               <span className={connected ? "text-emerald-400/80" : "text-red-400/80"}>
-                {connected ? "Connected" : "Reconnecting…"}
+                {connected ? (live ? "Live" : "Connected") : "Reconnecting…"}
               </span>
             </div>
           </div>
@@ -289,13 +348,21 @@ export default function Chat() {
                         : "bg-white/8 border border-white/10 text-gray-100 rounded-2xl rounded-bl-md"
                     } ${first ? "" : ""}`}
                   >
-                    {m.mediaRef ? (
+                    {m.mediaRef && brokenMedia.has(m.mediaRef) ? (
+                      <div className="flex items-center gap-2 rounded-lg border border-dashed border-white/15 bg-black/20 px-3 py-2 text-xs text-gray-400 -mx-1 my-1">
+                        <span>📦</span>
+                        <span>Archived to the local media drive</span>
+                      </div>
+                    ) : m.mediaRef ? (
                       isVideo(m.mediaMime) ? (
                         <video
                           src={`/api/media/${m.mediaRef}`}
                           controls
                           preload="metadata"
                           playsInline
+                          onError={() =>
+                            setBrokenMedia((prev) => new Set(prev).add(m.mediaRef!))
+                          }
                           className="max-w-full max-h-80 rounded-xl -mx-1 my-1"
                         />
                       ) : (
@@ -304,6 +371,9 @@ export default function Chat() {
                           src={`/api/media/${m.mediaRef}`}
                           alt={`Media from ${m.senderUsername}`}
                           loading="lazy"
+                          onError={() =>
+                            setBrokenMedia((prev) => new Set(prev).add(m.mediaRef!))
+                          }
                           className="max-w-full max-h-80 rounded-xl -mx-1 my-1 object-contain"
                         />
                       )
