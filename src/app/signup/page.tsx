@@ -1,5 +1,5 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Turnstile from "@/components/Turnstile";
 
@@ -77,6 +77,9 @@ export default function Signup() {
   const [secret, setSecret] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [showManualSecret, setShowManualSecret] = useState(false);
+  const [secretRevealed, setSecretRevealed] = useState(false);
+  const [codePhase, setCodePhase] = useState(false);
+  const secretRef = useRef<HTMLParagraphElement | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -179,6 +182,22 @@ export default function Signup() {
     if (!res.ok) throw new Error(data.error || "Failed to start 2FA setup");
     setSecret(data.secret ?? null);
     setQrDataUrl(data.qrDataUrl ?? null);
+    setShowManualSecret(false);
+    setSecretRevealed(false);
+    setCodePhase(false);
+  };
+
+  const revealSecret = () => {
+    setSecretRevealed(true);
+    // Select the key so the user can copy it straight into their authenticator app.
+    const el = secretRef.current;
+    if (el) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
   };
 
   const enableTwoFactor = async () => {
@@ -409,41 +428,87 @@ export default function Signup() {
           )}
 
           {/* Step 3 — 2FA setup */}
-          {step === "2fa" && (
+          {step === "2fa" && !codePhase && (
             <div className="space-y-4 animate-in fade-in duration-500">
-              {qrDataUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={qrDataUrl}
-                  alt="2FA QR code"
-                  className="mx-auto h-44 w-44 rounded-lg bg-white p-2"
-                />
-              ) : (
-                <div className="h-44 flex items-center justify-center">
-                  <div className="h-6 w-6 rounded-full border-2 border-white/20 border-t-white animate-spin" />
-                </div>
-              )}
-
-              {secret && (
-                <div className="text-center">
-                  {!showManualSecret ? (
-                    <button
-                      onClick={() => setShowManualSecret(true)}
-                      className="text-sm text-gray-400 underline underline-offset-2 hover:text-white transition-colors"
-                    >
-                      Can&apos;t scan the code? Enter it manually
-                    </button>
+              {!showManualSecret ? (
+                <>
+                  {qrDataUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={qrDataUrl}
+                      alt="2FA QR code"
+                      className="mx-auto h-44 w-44 rounded-lg bg-white p-2"
+                    />
                   ) : (
-                    <div className="text-sm text-gray-300 space-y-1">
-                      <p>Open your authenticator app and add this key:</p>
-                      <p className="select-all break-all bg-black/30 border border-white/10 rounded-lg px-3 py-2 font-mono text-xs text-white">
-                        {secret}
-                      </p>
+                    <div className="h-44 flex items-center justify-center">
+                      <div className="h-6 w-6 rounded-full border-2 border-white/20 border-t-white animate-spin" />
                     </div>
                   )}
+
+                  <button
+                    onClick={() => {
+                      setShowManualSecret(true);
+                      setSecretRevealed(false);
+                    }}
+                    className="mx-auto block text-sm text-gray-400 underline underline-offset-2 hover:text-white transition-colors"
+                  >
+                    Can&apos;t scan the code? Enter it manually
+                  </button>
+                </>
+              ) : (
+                <div className="text-center">
+                  <p className="text-sm text-gray-300 mb-2">
+                    Open your authenticator app and add this key:
+                  </p>
+                  <p
+                    ref={secretRef}
+                    role="button"
+                    tabIndex={0}
+                    onClick={revealSecret}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        revealSecret();
+                      }
+                    }}
+                    aria-hidden={!secretRevealed ? true : undefined}
+                    title={secretRevealed ? "Click to select the key" : "Click to reveal the key"}
+                    className={`mx-auto break-all rounded-lg border px-3 py-2.5 font-mono text-sm tracking-widest transition-all duration-300 ${
+                      secretRevealed
+                        ? "border-white/30 bg-black/40 text-white select-all cursor-text"
+                        : "border-white/10 bg-black/30 text-white blur-[5px] cursor-pointer select-none hover:border-white/30"
+                    }`}
+                  >
+                    {secret}
+                  </p>
+                  <p className="mt-2 text-xs text-gray-500">
+                    {secretRevealed
+                      ? "Key selected — copy it or type it into your app."
+                      : "Click the key above to reveal it."}
+                  </p>
                 </div>
               )}
 
+              <button onClick={() => setCodePhase(true)} className={primaryBtn}>
+                Next
+              </button>
+              {showManualSecret && (
+                <button
+                  onClick={() => setShowManualSecret(false)}
+                  className="mx-auto block text-sm text-gray-400 underline underline-offset-2 hover:text-white transition-colors"
+                >
+                  ← Back to QR code
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Step 3b — 2FA code entry */}
+          {step === "2fa" && codePhase && (
+            <div className="space-y-4 animate-in fade-in duration-500">
+              <p className="text-sm text-gray-300 text-center">
+                Enter the 6-digit code from your authenticator app.
+              </p>
               <input
                 type="text"
                 inputMode="numeric"
@@ -452,6 +517,7 @@ export default function Signup() {
                 onChange={(e) => setTotpCode(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && enableTwoFactor()}
                 maxLength={6}
+                autoFocus
                 className={`${inputClass} tracking-[0.5em] text-center`}
               />
               <button
@@ -460,6 +526,12 @@ export default function Signup() {
                 className={primaryBtn}
               >
                 {loading ? "Verifying..." : "Finish setup"}
+              </button>
+              <button
+                onClick={() => setCodePhase(false)}
+                className="mx-auto block text-sm text-gray-400 underline underline-offset-2 hover:text-white transition-colors"
+              >
+                ← Back
               </button>
             </div>
           )}

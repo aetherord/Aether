@@ -181,6 +181,28 @@ export async function enqueueMedia(input: {
   return id;
 }
 
+export interface MediaStats {
+  configured: boolean;
+  total: number;
+  synced: number;
+  pending: number;
+}
+
+/** Aggregate counts from the media queue (total / synced / waiting). */
+export async function mediaStats(): Promise<MediaStats> {
+  if (!mediaConfigured()) {
+    return { configured: false, total: 0, synced: 0, pending: 0 };
+  }
+  await ensureMediaSchema();
+  const rows = await tursoSelect(
+    "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN synced = 1 THEN 1 ELSE 0 END), 0) AS synced FROM media_queue"
+  );
+  const row = rows[0];
+  const total = Number(row?.[0] ?? 0);
+  const synced = Number(row?.[1] ?? 0);
+  return { configured: true, total, synced, pending: Math.max(0, total - synced) };
+}
+
 export async function getMedia(id: string): Promise<MediaRecord | null> {
   await ensureMediaSchema();
   const rows = await tursoSelect(
