@@ -213,6 +213,9 @@ export default function Chat() {
   const [room, setRoom] = useState<Room>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(false);
+  // Highest message id we currently have in the open room — sent to the stream
+  // as `after=` so its initial catch-up only delivers genuinely new messages.
+  const lastMsgIdRef = useRef(0);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -554,6 +557,8 @@ export default function Chat() {
         if (data.messages) {
           setMessages((prev) => (append ? [...data.messages!, ...prev] : data.messages!));
           setHasMore(Boolean(data.hasMore));
+          const maxId = data.messages.reduce((mx, m) => Math.max(mx, m.id), 0);
+          if (maxId > lastMsgIdRef.current) lastMsgIdRef.current = maxId;
         }
         setConnected(true);
       } catch {
@@ -570,10 +575,12 @@ export default function Chat() {
       setMessages([]);
       setHasMore(false);
       setConnected(false);
+      lastMsgIdRef.current = 0;
       return;
     }
     setMessages([]);
     setHasMore(false);
+    lastMsgIdRef.current = 0;
     setBrokenMedia(new Set());
     setFlaggedMedia(new Set());
     setTypers([]);
@@ -581,7 +588,11 @@ export default function Chat() {
     setDecryptedMap({});
     // Anything older than this was here before we opened the room.
     roomOpenedAtRef.current = Date.now();
-    loadMessages();
+    // Load the newest page first, then attach the live stream with `after=`
+    // set to our highest loaded id — the stream must never replay old messages.
+    loadMessages().then(() => {
+      if (!stopped) connect();
+    });
 
     let es: EventSource | null = null;
     let esFailures = 0;
@@ -640,6 +651,8 @@ export default function Chat() {
           params.set("room", "dm");
           params.set("peer", room.peer);
         }
+        // Only deliver messages newer than what we already have.
+        if (lastMsgIdRef.current > 0) params.set("after", String(lastMsgIdRef.current));
         es = new EventSource(`/api/chat/stream?${params.toString()}`);
         es.onopen = () => {
           if (stopped) return;
@@ -655,6 +668,7 @@ export default function Chat() {
               if (prev.some((p) => p.id === m.id)) return prev;
               return [...prev, m];
             });
+            if (m.id > lastMsgIdRef.current) lastMsgIdRef.current = m.id;
             maybeNotify(m);
             setConnected(true);
             // Reactions on streamed messages aren't in the frame — fetch them.
@@ -2237,8 +2251,9 @@ export default function Chat() {
                 <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Their time</div>
                 <div className="font-mono text-sm text-white">
                   {peerTime}
-                  <span className="text-gray-500 text-xs ml-2">{peerTzName ?? peerProfile.timezone}</span>
+                  <span className="text-gray-500 text-xs ml-2">{peerProfile.timezone}</span>
                 </div>
+                {peerTzName && <div className="text-[10px] text-gray-600 mt-0.5">{peerTzName}</div>}
               </div>
             )}
             <div className="mt-2 text-[11px] text-gray-600">Joined {dayLabel(peerProfile?.createdAt ?? 0)}</div>

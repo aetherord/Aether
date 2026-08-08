@@ -31,7 +31,12 @@ export async function GET(req: Request) {
 
     const store = await getStore();
     const encoder = new TextEncoder();
-    let lastId = 0;
+    // Start from the highest message id the client already has (it sends
+    // `after=<id>` on connect). Without this the initial catch-up would replay
+    // the OLDEST messages of the thread and dump them below the newest ones.
+    const afterRaw = Number(url.searchParams.get("after") ?? 0);
+    const after = Number.isFinite(afterRaw) && afterRaw > 0 ? Math.floor(afterRaw) : 0;
+    let lastId = after;
     const blocked = new Set(await store.getBlockedIds(session.user.id));
 
     const stream = new ReadableStream<Uint8Array>({

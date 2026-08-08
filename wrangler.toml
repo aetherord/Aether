@@ -20,8 +20,7 @@ NEXT_PUBLIC_TURNSTILE_SITE_KEY = "0x4AAAAAAEJsMbR9tqD7cn3k"
 # Workers AI binding for automated NSFW screening of uploaded images
 # (classifyImage in src/lib/nsfw.ts). Optional: without it, uploads are
 # never scanned and the feature degrades to report-only.
-[[ai]]
-binding = "AI"
+ai = { binding = "AI" }
 
 [[d1_databases]]
 binding = "DB"
