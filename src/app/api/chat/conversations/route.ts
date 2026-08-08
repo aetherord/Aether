@@ -17,7 +17,14 @@ export async function GET(req: Request) {
       conversations.map(async (c) => {
         const myLastRead = (await store.getReadReceipt(session.user.id, "dm", c.peer)) ?? 0;
         const unread = await store.countUnreadDm(session.user.username, c.peer, myLastRead);
-        return { ...c, myLastReadId: myLastRead || null, unread };
+        const peerProfile = await store.getProfileByUsername(c.peer);
+        return {
+          ...c,
+          avatar: peerProfile?.avatar ?? null,
+          displayName: peerProfile?.displayName ?? null,
+          myLastReadId: myLastRead || null,
+          unread,
+        };
       })
     );
     return jsonOk({ conversations: withUnread });

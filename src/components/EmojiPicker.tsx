@@ -83,7 +83,7 @@ export default function EmojiPicker({ onPick, onPickGif }: EmojiPickerProps) {
   }, [tab, gifQuery]);
 
   return (
-    <div className="w-80 max-w-[80vw] h-80 flex flex-col rounded-2xl glass-strong overflow-hidden animate-in zoom-in-95 fade-in duration-150">
+    <div className="w-80 max-w-[80vw] h-80 flex flex-col rounded-2xl bg-[#16171b] border border-white/10 shadow-2xl shadow-black/60 overflow-hidden animate-in zoom-in-95 fade-in duration-150">
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-2">
         {tab === "gifs" ? (
@@ -138,7 +138,7 @@ export default function EmojiPicker({ onPick, onPickGif }: EmojiPickerProps) {
       </div>
 
       {/* Tabs */}
-      <div className="border-t border-white/10 flex items-stretch justify-between px-1 py-1 bg-black/20">
+      <div className="border-t border-white/10 flex items-stretch justify-between px-1 py-1 bg-[#1c1e22]">
         {(Object.keys(EMOJI_GROUPS) as Exclude<Tab, "gifs">[]).map((t) => (
           <button
             key={t}

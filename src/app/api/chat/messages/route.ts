@@ -57,12 +57,26 @@ async function decorate(
     byMessage.set(r.messageId, list);
   }
 
-  return messages.map((m) => {
+  // Sender avatars + display names for the message rows (cached per call —
+  // few distinct senders in one page).
+  const senderCache = new Map<string, { avatar: string | null; displayName: string | null }>();
+  const senderInfo = async (username: string): Promise<{ avatar: string | null; displayName: string | null }> => {
+    if (!senderCache.has(username)) {
+      const u = await store.getUserByUsername(username);
+      senderCache.set(username, { avatar: u?.avatar ?? null, displayName: u?.displayName ?? null });
+    }
+    return senderCache.get(username) ?? { avatar: null, displayName: null };
+  };
+
+  return Promise.all(messages.map(async (m) => {
     const ref = m.replyToId != null ? replyMap.get(m.replyToId) : undefined;
+    const sender = await senderInfo(m.senderUsername);
     return {
       id: m.id,
       senderId: m.senderId,
       senderUsername: m.senderUsername,
+      senderAvatar: sender.avatar,
+      senderDisplayName: sender.displayName,
       recipientUsername: m.recipientUsername,
       content: m.content,
       mediaRef: m.mediaRef,
@@ -81,7 +95,7 @@ async function decorate(
         : null,
       reactions: byMessage.get(m.id) ?? [],
     };
-  });
+  }));
 }
 
 /** GET /api/chat/messages?room=dm&peer=...&before=<id> */
@@ -93,6 +107,17 @@ export async function GET(req: Request) {
     const store = await getStore();
     const url = new URL(req.url);
     const room = parseRoom(url, session.user.username);
+
+    // `after=<id>` returns only messages newer than that id (used by the
+    // polling fallback to append without ever replacing/re-ordering the list).
+    const afterRaw = Number(url.searchParams.get("after") ?? 0);
+    if (Number.isFinite(afterRaw) && afterRaw > 0) {
+      const newer = await store.listMessagesAfter(Math.floor(afterRaw), room, 100);
+      const blockedAfter = new Set(await store.getBlockedIds(session.user.id));
+      const filtered = blockedAfter.size > 0 ? newer.filter((m) => !blockedAfter.has(m.senderId)) : newer;
+      return jsonOk({ messages: await decorate(store, session.user.id, filtered) });
+    }
+
     const beforeRaw = Number(url.searchParams.get("before") ?? 0);
     const before = Number.isFinite(beforeRaw) && beforeRaw > 0 ? beforeRaw : null;
 

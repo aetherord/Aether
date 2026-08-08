@@ -14,12 +14,19 @@ interface SessionUser {
   id: number;
   email: string;
   username: string;
+  displayName?: string | null;
   role?: string;
   avatar?: string | null;
 }
 
+/** Shows the display name when set, otherwise @username. */
+function displayLabel(username: string, displayName?: string | null): string {
+  const d = displayName?.trim();
+  return d ? d : `@${username}`;
+}
+
 type Privacy = "everyone" | "friends" | "nobody";
-type Tab = "profile" | "account" | "privacy" | "security" | "notifications" | "media";
+type Tab = "profile" | "account" | "privacy" | "security" | "notifications" | "chat" | "media";
 
 const inputCls =
   "w-full px-3.5 py-2.5 bg-black/30 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition";
@@ -57,6 +64,8 @@ export default function Settings() {
   const [ringtoneOn, setRingtoneOn] = useState(ringtoneEnabled());
   const [avatarBusy, setAvatarBusy] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = useState("");
+  const [displayNameBusy, setDisplayNameBusy] = useState(false);
   const [editorFile, setEditorFile] = useState<File | null>(null);
 
   const [mediaStats, setMediaStats] = useState<{ configured: boolean; pending?: number; synced?: number; total?: number } | null>(null);
@@ -82,6 +91,7 @@ export default function Settings() {
           return;
         }
         setUser(data.user);
+        setDisplayNameDraft(data.user.displayName ?? "");
         setTwoFactorEnabled(Boolean(data.twoFactorEnabled));
         setChecking(false);
         setNotifStatus(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
@@ -191,6 +201,27 @@ export default function Settings() {
       setError(err instanceof Error ? err.message : "Failed to remove");
     } finally {
       setAvatarBusy(false);
+    }
+  };
+
+  const saveDisplayName = async () => {
+    setDisplayNameBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/settings/display-name", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: displayNameDraft.trim() }),
+      });
+      if (!res.ok) throw new Error("Failed to save display name");
+      const saved = displayNameDraft.trim() || null;
+      setUser((u) => (u ? { ...u, displayName: saved } : u));
+      setMessage(saved ? "Display name saved." : "Display name cleared.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save display name");
+    } finally {
+      setDisplayNameBusy(false);
     }
   };
 
@@ -349,8 +380,22 @@ export default function Settings() {
     { id: "privacy", label: "Privacy", icon: "🛡" },
     { id: "security", label: "Security", icon: "🔐" },
     { id: "notifications", label: "Notifications", icon: "🔔" },
+    { id: "chat", label: "Chat", icon: "💬" },
     { id: "media", label: "Media archive", icon: "🗂" },
   ];
+
+  const [chatStyle, setChatStyle] = useState<"texting" | "stacked">(() =>
+    typeof window !== "undefined" && window.localStorage.getItem("aether_chat_style") === "stacked" ? "stacked" : "texting"
+  );
+
+  const pickChatStyle = (style: "texting" | "stacked") => {
+    setChatStyle(style);
+    try {
+      window.localStorage.setItem("aether_chat_style", style);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const avatarUrl = user?.avatar ? `/api/media/${user.avatar}` : null;
 
@@ -387,7 +432,7 @@ export default function Settings() {
                 </div>
               )}
               <div className="min-w-0">
-                <div className="text-sm font-semibold truncate">@{user?.username}</div>
+                <div className="text-sm font-semibold truncate">{displayLabel(user?.username ?? "", user?.displayName)}</div>
                 <div className="text-[11px] text-gray-500 truncate">{user?.email}</div>
               </div>
             </div>
@@ -425,6 +470,34 @@ export default function Settings() {
             )}
 
             {/* Profile */}
+            {tab === "profile" && (
+              <section className="glass rounded-2xl p-6 mb-5">
+                <h2 className="font-semibold text-lg">Display name</h2>
+                <p className="text-sm text-gray-400 mt-0.5 mb-4">
+                  Shown without the @ — otherwise people see your username. Leave blank to use @{user?.username}.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    value={displayNameDraft}
+                    onChange={(e) => setDisplayNameDraft(e.target.value)}
+                    placeholder="Your name"
+                    maxLength={40}
+                    className={inputCls}
+                  />
+                  <button
+                    onClick={() => void saveDisplayName()}
+                    disabled={displayNameBusy}
+                    className="shrink-0 px-5 py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-gray-200 transition disabled:opacity-40"
+                  >
+                    {displayNameBusy ? "Saving…" : "Save"}
+                  </button>
+                </div>
+                <p className="mt-3 text-xs text-gray-600">
+                  Preview: <span className="text-gray-300">{displayLabel(user?.username ?? "", displayNameDraft.trim() || user?.displayName)}</span>
+                </p>
+              </section>
+            )}
+
             {tab === "profile" && (
               <section className="glass rounded-2xl p-6">
                 <h2 className="font-semibold text-lg">Profile picture</h2>
@@ -735,6 +808,38 @@ export default function Settings() {
                         ringtoneOn ? "left-[22px] bg-black" : "left-0.5 bg-gray-400"
                       }`}
                     />
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {/* Chat */}
+            {tab === "chat" && (
+              <section className="glass rounded-2xl p-6">
+                <h2 className="font-semibold text-lg mb-1">Chat style</h2>
+                <p className="text-sm text-gray-400 mb-5">How messages are laid out in a conversation.</p>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <button
+                    onClick={() => pickChatStyle("texting")}
+                    className={`rounded-xl border p-4 text-left transition ${
+                      chatStyle === "texting" ? "border-white/60 bg-white/10" : "border-white/10 bg-black/20 hover:bg-white/5"
+                    }`}
+                  >
+                    <div className="text-sm font-medium mb-1">Texting</div>
+                    <div className="text-[11px] text-gray-500 leading-relaxed">
+                      Messages in bubbles, yours on the right — like iMessage.
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => pickChatStyle("stacked")}
+                    className={`rounded-xl border p-4 text-left transition ${
+                      chatStyle === "stacked" ? "border-white/60 bg-white/10" : "border-white/10 bg-black/20 hover:bg-white/5"
+                    }`}
+                  >
+                    <div className="text-sm font-medium mb-1">Messages below each other</div>
+                    <div className="text-[11px] text-gray-500 leading-relaxed">
+                      Full-width rows with the sender name above each message — like Discord.
+                    </div>
                   </button>
                 </div>
               </section>

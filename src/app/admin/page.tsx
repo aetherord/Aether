@@ -171,10 +171,7 @@ export default function Admin() {
   }, [router]);
 
   const searchUsers = useCallback(async (q: string) => {
-    if (q.trim().length < 2) {
-      setUsers([]);
-      return;
-    }
+    // Empty query lists the whole user base; otherwise filter by username/email.
     try {
       const res = await fetch(`/api/moderation/admin?view=users&q=${encodeURIComponent(q)}`);
       const data = await safeJson<{ users?: SearchUser[] }>(res);
@@ -183,6 +180,12 @@ export default function Admin() {
       /* ignore */
     }
   }, []);
+
+  // Browse mode: list users on mount and whenever the Users tab is opened.
+  useEffect(() => {
+    if (tab === "users") void searchUsers(query);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   const loadAudit = useCallback(async (username: string) => {
     setBusy(true);
@@ -437,27 +440,25 @@ export default function Admin() {
                     <path d="m21 21-4.3-4.3" />
                   </svg>
                 </div>
-                {query.trim().length >= 2 && (
-                  <div className="mt-2 space-y-1 max-h-64 overflow-y-auto">
-                    {users.length === 0 && <p className="text-xs text-gray-600 px-2 py-2">No matches.</p>}
-                    {users.map((u) => (
-                      <button
-                        key={u.id}
-                        onClick={() => void loadAudit(u.username)}
-                        className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition ${
-                          audit?.user.username === u.username ? "bg-white/15" : "hover:bg-white/5"
-                        }`}
-                      >
-                        <div className="font-medium truncate">{u.username}</div>
-                        <div className="text-[10px] text-gray-500 truncate">
-                          {u.role === "admin" ? "Admin · " : ""}
-                          {u.bannedUntil && u.bannedUntil > Date.now() ? "Banned · " : ""}
-                          {u.mutedUntil && u.mutedUntil > Date.now() ? "Muted" : ""}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <div className="mt-2 space-y-1 max-h-64 overflow-y-auto">
+                  {users.length === 0 && <p className="text-xs text-gray-600 px-2 py-2">No users found.</p>}
+                  {users.map((u) => (
+                    <button
+                      key={u.id}
+                      onClick={() => void loadAudit(u.username)}
+                      className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition ${
+                        audit?.user.username === u.username ? "bg-white/15" : "hover:bg-white/5"
+                      }`}
+                    >
+                      <div className="font-medium truncate">{u.username}</div>
+                      <div className="text-[10px] text-gray-500 truncate">
+                        {u.role === "admin" ? "Admin · " : ""}
+                        {u.bannedUntil && u.bannedUntil > Date.now() ? "Banned · " : ""}
+                        {u.mutedUntil && u.mutedUntil > Date.now() ? "Muted" : ""}
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <nav className="mt-1 px-2 space-y-0.5">
@@ -506,8 +507,39 @@ export default function Admin() {
               )}
 
               {tab === "users" && !audit && (
-                <div className="h-full flex items-center justify-center text-sm text-gray-600">
-                  Search for a user to open their moderation panel.
+                <div>
+                  <div className="mb-3">
+                    <h2 className="text-lg font-semibold">All users</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {users.length} user(s) — click one to open their moderation panel, or search above.
+                    </p>
+                  </div>
+                  <div className="grid gap-1.5">
+                    {users.map((u) => (
+                      <button
+                        key={u.id}
+                        onClick={() => void loadAudit(u.username)}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-left hover:bg-white/5 transition"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">@{u.username}</div>
+                          <div className="text-[11px] text-gray-500 truncate">{u.email}</div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 text-[10px]">
+                          {u.role === "admin" && (
+                            <span className="rounded-full bg-white/10 border border-white/20 px-2 py-0.5 text-gray-300">Admin</span>
+                          )}
+                          {u.bannedUntil && u.bannedUntil > Date.now() && (
+                            <span className="rounded-full bg-red-500/15 border border-red-500/30 px-2 py-0.5 text-red-300">Banned</span>
+                          )}
+                          {u.mutedUntil && u.mutedUntil > Date.now() && (
+                            <span className="rounded-full bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 text-yellow-300">Muted</span>
+                          )}
+                          <span className="text-gray-600">{fmtTime(u.createdAt)}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 

@@ -87,10 +87,10 @@ export async function GET(req: Request) {
       });
     }
 
-    // Default: user search
+    // Default: user search — an empty query lists everyone so the admin can
+    // browse the whole user base instead of needing to know a username first.
     const q = (url.searchParams.get("q") ?? "").trim();
-    if (q.length < 2) return jsonOk({ users: [] });
-    const users = await store.searchUsers(q, 25);
+    const users = await store.searchUsers(q, q.length >= 2 ? 25 : 200);
     return jsonOk({ users });
   } catch (err) {
     return handleApiError(err);

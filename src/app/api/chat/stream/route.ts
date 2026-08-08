@@ -46,6 +46,17 @@ export async function GET(req: Request) {
           if (!closed) controller.enqueue(encoder.encode(data));
         };
 
+        // Sender avatars + display names for streamed rows (same decoration as
+        // the messages GET route, so live messages show the right name/PFP).
+        const senderCache = new Map<string, { avatar: string | null; displayName: string | null }>();
+        const senderInfo = async (username: string): Promise<{ avatar: string | null; displayName: string | null }> => {
+          if (!senderCache.has(username)) {
+            const u = await store.getUserByUsername(username);
+            senderCache.set(username, { avatar: u?.avatar ?? null, displayName: u?.displayName ?? null });
+          }
+          return senderCache.get(username) ?? { avatar: null, displayName: null };
+        };
+
         const poll = async () => {
           try {
             const messages = await store.listMessagesAfter(lastId, room, 100);
@@ -53,7 +64,8 @@ export async function GET(req: Request) {
               if (m.id <= lastId) continue;
               lastId = m.id;
               if (blocked.has(m.senderId)) continue; // respect the block list
-              send(`data: ${JSON.stringify(m)}\n\n`);
+              const sender = await senderInfo(m.senderUsername);
+              send(`data: ${JSON.stringify({ ...m, senderAvatar: sender.avatar, senderDisplayName: sender.displayName })}\n\n`);
             }
           } catch {
             // transient error — keep the connection alive for the next poll

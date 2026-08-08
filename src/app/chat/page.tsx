@@ -44,6 +44,8 @@ interface Message {
   id: number;
   senderId: number;
   senderUsername: string;
+  senderAvatar?: string | null;
+  senderDisplayName?: string | null;
   recipientUsername: string | null;
   content: string;
   mediaRef: string | null;
@@ -63,6 +65,8 @@ interface Conversation {
   mediaMime: string | null;
   lastAt: number;
   lastSender: string;
+  avatar?: string | null;
+  displayName?: string | null;
   myLastReadId?: number | null;
   unread?: number;
 }
@@ -78,9 +82,16 @@ interface SessionUser {
   id: number;
   email: string;
   username: string;
+  displayName?: string | null;
   role?: string;
   avatar?: string | null;
   status?: string;
+}
+
+/** Shows the display name when set, otherwise @username. */
+function displayLabel(username: string, displayName?: string | null): string {
+  const d = displayName?.trim();
+  return d ? d : `@${username}`;
 }
 
 type Room = { kind: "dm"; peer: string } | null;
@@ -230,6 +241,10 @@ export default function Chat() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
+  // "texting" = bubbles (default); "stacked" = Discord-style rows.
+  const [chatStyle] = useState<"texting" | "stacked">(() =>
+    typeof window !== "undefined" && window.localStorage.getItem("aether_chat_style") === "stacked" ? "stacked" : "texting"
+  );
   const [actionFor, setActionFor] = useState<number | null>(null);
   const [reportFor, setReportFor] = useState<Message | null>(null);
   const [reportReason, setReportReason] = useState("");
@@ -283,6 +298,7 @@ export default function Chat() {
   const [peerPub, setPeerPub] = useState<string | null>(null);
   const [peerProfile, setPeerProfile] = useState<{
     username: string;
+    displayName?: string | null;
     avatar: string | null;
     timezone: string | null;
     status: string;
@@ -605,8 +621,35 @@ export default function Chat() {
         pollTimer = null;
       }
     };
+    // Poll fallback must APPEND only new messages (never replace the list,
+    // which would wipe loaded history and jump the scroll position).
+    const loadNew = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (room) {
+          params.set("room", "dm");
+          params.set("peer", room.peer);
+        }
+        params.set("after", String(Math.max(0, lastMsgIdRef.current)));
+        const res = await fetch(`/api/chat/messages?${params.toString()}`);
+        if (!res.ok) return;
+        const data = await safeJson<{ messages?: Message[] }>(res);
+        if (data.messages?.length) {
+          setMessages((prev) => {
+            const have = new Set(prev.map((p) => p.id));
+            const fresh = data.messages!.filter((m) => !have.has(m.id));
+            if (!fresh.length) return prev;
+            return [...prev, ...fresh];
+          });
+          const maxId = data.messages.reduce((mx, m) => Math.max(mx, m.id), 0);
+          if (maxId > lastMsgIdRef.current) lastMsgIdRef.current = maxId;
+        }
+      } catch {
+        /* transient */
+      }
+    };
     const startPolling = () => {
-      if (!pollTimer) pollTimer = setInterval(() => loadMessages(), POLL_MS);
+      if (!pollTimer) pollTimer = setInterval(() => void loadNew(), POLL_MS);
     };
 
     const maybeNotify = (m: Message) => {
@@ -1323,7 +1366,9 @@ export default function Chat() {
       const next = messages[i + 1];
       const sameSender = prev && prev.senderUsername === m.senderUsername;
       const sameDay = prev && dayLabel(prev.createdAt) === dayLabel(m.createdAt);
-      const close = prev && m.createdAt - prev.createdAt < 5 * 60 * 1000;
+      // A "run" is the same sender talking repeatedly; the name reappears after
+      // a pause of roughly a day (or on a new day) — like most group chats.
+      const close = prev && sameDay && m.createdAt - prev.createdAt < 24 * 60 * 60 * 1000;
       out.push({
         message: m,
         first: !(sameSender && sameDay && close),
@@ -1331,14 +1376,16 @@ export default function Chat() {
           next &&
           next.senderUsername === m.senderUsername &&
           dayLabel(next.createdAt) === dayLabel(m.createdAt) &&
-          next.createdAt - m.createdAt < 5 * 60 * 1000
+          next.createdAt - m.createdAt < 24 * 60 * 60 * 1000
         ),
       });
     }
     return out;
   }, [messages]);
 
-  const roomTitle = room ? room.peer : "Messages";
+  const roomTitle = room
+    ? displayLabel(room.peer, peerProfile?.displayName)
+    : "Messages";
   const e2eActive = Boolean(room && e2eKeys && peerPub);
   // Only working images go into the lightbox — flagged/gone media is excluded.
   const mediaSrcs = useMemo(
@@ -1408,8 +1455,8 @@ export default function Chat() {
   }, [messages, flaggedMedia, brokenMedia]);
 
   const openAdmin = () => {
-    const w = window.open("/admin", "aether-moderation", "width=1180,height=780,popup=yes");
-    if (!w) router.push("/admin"); // popup blocked — fall back to this tab
+    // The admin panel takes over this window (no popup).
+    router.push("/admin");
   };
 
   if (checking) {
@@ -1518,14 +1565,14 @@ export default function Chat() {
                   active ? "bg-white/10" : "hover:bg-white/5"
                 }`}
               >
-                <Avatar name={c.peer} size={28} />
+                <Avatar name={c.peer} avatar={c.avatar} size={28} />
                 <div className="min-w-0 flex-1">
                   <div
                     className={`truncate flex items-center gap-1.5 ${
                       (c.unread ?? 0) > 0 ? "text-xs font-semibold text-white" : "text-xs font-medium text-gray-300"
                     }`}
                   >
-                    <span className="truncate">{c.peer}</span>
+                    <span className="truncate">{displayLabel(c.peer, c.displayName)}</span>
                     {(c.unread ?? 0) > 0 && (
                       <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-black text-[10px] font-bold flex items-center justify-center">
                         {c.unread! > 99 ? "99+" : c.unread}
@@ -1570,7 +1617,7 @@ export default function Chat() {
         <div className="border-t border-white/10 p-3 flex items-center gap-2.5">
           <Avatar name={user?.username ?? "?"} avatar={user?.avatar} size={30} />
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium truncate">@{user?.username}</div>
+            <div className="text-xs font-medium truncate">{displayLabel(user?.username ?? "", user?.displayName)}</div>
             <div className="relative" ref={statusMenuRef}>
               <button
                 onClick={() => setStatusOpen((v) => !v)}
@@ -1793,6 +1840,200 @@ export default function Chat() {
                       const displayContent = decryptedMap[m.id] ?? m.content;
                       const encrypted = m.content.startsWith(E2E_PREFIX);
                       const reactions = m.reactions ?? [];
+
+                      const actionsRow = (
+                        <div
+                          className={`flex items-center gap-1 text-[11px] transition-all duration-150 ${
+                            mine ? "justify-end" : "justify-start"
+                          } ${showActions ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                        >
+                          <button
+                            onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}
+                            className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                            title="React"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="12" r="10" />
+                              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                              <line x1="9" x2="9.01" y1="9" y2="9" />
+                              <line x1="15" x2="15.01" y1="9" y2="9" />
+                            </svg>
+                          </button>
+                          {mine ? (
+                            <button
+                              onClick={() => {
+                                setEditing(m);
+                                setEditDraft(decryptedMap[m.id] ?? m.content);
+                                setReplyTo(null);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                              title="Edit"
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                              </svg>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setReplyTo(m);
+                                setEditing(null);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                              title="Reply"
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="9 17 4 12 9 7" />
+                                <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                              </svg>
+                            </button>
+                          )}
+                          {!mine && (
+                            <button
+                              onClick={() => {
+                                setReportFor(m);
+                                setReportReason("");
+                              }}
+                              className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                              title="Report"
+                            >
+                              <FlagIcon size={13} />
+                            </button>
+                          )}
+                          {mine && user?.role === "admin" && m.editedAt && (
+                            <button
+                              onClick={() => void openHistory(m)}
+                              className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                              title="Edit history"
+                            >
+                              🕘
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setActionFor(showActions ? null : m.id)}
+                            className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                            title="More"
+                          >
+                            <DotsIcon size={13} />
+                          </button>
+                        </div>
+                      );
+
+                      // Discord-style layout: every message is a full-width row.
+                      if (chatStyle === "stacked") {
+                        return (
+                          <div
+                            key={m.id}
+                            className={`flex gap-3 px-1 py-1 rounded-lg hover:bg-white/[0.04] transition ${
+                              first ? "mt-3" : ""
+                            }`}
+                            onMouseLeave={() => setActionFor(null)}
+                          >
+                            <div
+                              className={`shrink-0 w-9 h-9 rounded-full overflow-hidden flex items-center justify-center mt-0.5 ${
+                                m.senderAvatar ? "" : `bg-gradient-to-br ${avatarGradient(m.senderUsername)}`
+                              }`}
+                            >
+                              {m.senderAvatar ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={`/api/media/${m.senderAvatar}`} alt={m.senderUsername} className="w-full h-full object-cover" />
+                              ) : (
+                                <span className="text-sm font-bold text-white">{m.senderUsername.slice(0, 1).toUpperCase()}</span>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-baseline gap-2 text-xs px-1">
+                                {first ? (
+                                  <>
+                                    <button
+                                      onClick={() => setProfileOpen(true)}
+                                      className="font-medium text-gray-200 hover:text-white transition cursor-pointer"
+                                      title="View profile"
+                                    >
+                                      {displayLabel(m.senderUsername, m.senderDisplayName)}
+                                    </button>
+                                    <span className="text-gray-600">{timeLabel(m.createdAt)}</span>
+                                  </>
+                                ) : null}
+                                {m.editedAt && <span className="text-[10px] text-gray-500">(edited)</span>}
+                                {mine && last && room && peerReadUntil >= m.id && (
+                                  <span className="text-[10px] text-gray-400" title={`Read by ${room.peer}`}>
+                                    Read
+                                  </span>
+                                )}
+                              </div>
+                              {actionsRow}
+                              {m.replyTo && (
+                                <div
+                                  className="mb-1 rounded-lg border-l-2 border-white/25 bg-white/5 px-2.5 py-1.5 text-[11px] text-gray-400 cursor-pointer hover:bg-white/10 transition"
+                                  onClick={() => {
+                                    const el = document.getElementById(`msg-${m.replyTo!.id}`);
+                                    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                                  }}
+                                >
+                                  <span className="font-medium text-gray-300">{m.replyTo.senderUsername}</span>
+                                  <span className="ml-1.5 truncate block max-w-[24ch] sm:max-w-[36ch]">
+                                    {m.replyTo.mediaRef ? "📎 Media" : plainText(m.replyTo.content)}
+                                  </span>
+                                </div>
+                              )}
+                              {m.mediaRef && (
+                                <MediaBubble
+                                  mediaRef={m.mediaRef}
+                                  mime={m.mediaMime}
+                                  onFlagged={(ref) => setFlaggedMedia((prev) => new Set(prev).add(ref))}
+                                  onError={(ref) => setBrokenMedia((prev) => new Set(prev).add(ref))}
+                                  onOpen={(url, ref) => {
+                                    const idx = mediaSrcs.indexOf(`/api/media/${ref}`);
+                                    setLightbox({ srcs: mediaSrcs, index: Math.max(0, idx) });
+                                  }}
+                                />
+                              )}
+                              {displayContent !== "" && displayContent != null ? (
+                                <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
+                                  {formatText(displayContent)}
+                                  {encrypted && (
+                                    <span className="ml-1 text-gray-500" title="End-to-end encrypted">🔒</span>
+                                  )}
+                                </p>
+                              ) : null}
+                              {reactions.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {reactions.map((r) => (
+                                    <button
+                                      key={r.emoji}
+                                      onClick={() => void toggleReaction(m, r.emoji)}
+                                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${
+                                        r.mine
+                                          ? "border-white/60 bg-white/20"
+                                          : "border-white/10 bg-white/5 hover:bg-white/10"
+                                      }`}
+                                    >
+                                      <span>{r.emoji}</span>
+                                      <span className="text-gray-400">{r.count}</span>
+                                    </button>
+                                  ))}
+                                  <button
+                                    onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}
+                                    className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-400 hover:bg-white/10 hover:text-white transition"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              )}
+                              {pickerFor === m.id && (
+                                <div className="relative z-20 mt-1">
+                                  <EmojiPicker
+                                    onPick={(e) => void toggleReaction(m, e)}
+                                    onPickGif={(url) => void sendGif(url)}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+
                       return (
                         <div
                           key={m.id}
@@ -1803,20 +2044,31 @@ export default function Chat() {
                         >
                           {/* Avatar */}
                           <div
-                            className={`shrink-0 w-8 h-8 rounded-full bg-gradient-to-br ${avatarGradient(
-                              m.senderUsername
-                            )} flex items-center justify-center text-xs font-bold text-white ${
+                            className={`shrink-0 w-8 h-8 rounded-full overflow-hidden flex items-center justify-center ${
                               first ? "opacity-100" : "opacity-0"
-                            } transition-opacity`}
+                            } transition-opacity ${
+                              m.senderAvatar ? "" : `bg-gradient-to-br ${avatarGradient(m.senderUsername)}`
+                            }`}
                           >
-                            {m.senderUsername.slice(0, 1).toUpperCase()}
+                            {m.senderAvatar ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={`/api/media/${m.senderAvatar}`} alt={m.senderUsername} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-xs font-bold text-white">{m.senderUsername.slice(0, 1).toUpperCase()}</span>
+                            )}
                           </div>
 
                           {/* Bubble */}
                           <div className={`max-w-[75%] ${mine ? "items-end" : "items-start"} flex flex-col`}>
                             {first && (
                               <div className={`flex items-baseline gap-2 px-1 mb-1 text-xs ${mine ? "flex-row-reverse" : ""}`}>
-                                <span className="font-medium text-gray-300">{m.senderUsername}</span>
+                                <button
+                                  onClick={() => setProfileOpen(true)}
+                                  className="font-medium text-gray-300 hover:text-white transition cursor-pointer"
+                                  title="View profile"
+                                >
+                                  {displayLabel(m.senderUsername, m.senderDisplayName)}
+                                </button>
                                 <span className="text-gray-600">{timeLabel(m.createdAt)}</span>
                               </div>
                             )}
@@ -1838,6 +2090,8 @@ export default function Chat() {
                                 </span>
                               </div>
                             )}
+
+                            {actionsRow}
 
                             <div
                               id={`msg-${m.id}`}
@@ -1892,83 +2146,6 @@ export default function Chat() {
                               ) : null}
                             </div>
 
-                            {/* Hover actions — inline under the bubble so they never overlap */}
-                            <div
-                              className={`flex items-center gap-1 text-[11px] transition-all duration-150 ${
-                                mine ? "justify-end" : "justify-start"
-                              } ${showActions ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-                            >
-                              <button
-                                onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="React"
-                              >
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <circle cx="12" cy="12" r="10" />
-                                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                                  <line x1="9" x2="9.01" y1="9" y2="9" />
-                                  <line x1="15" x2="15.01" y1="9" y2="9" />
-                                </svg>
-                              </button>
-                              {mine ? (
-                                <button
-                                  onClick={() => {
-                                    setEditing(m);
-                                    setEditDraft(decryptedMap[m.id] ?? m.content);
-                                    setReplyTo(null);
-                                  }}
-                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                  title="Edit"
-                                >
-                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                                  </svg>
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setReplyTo(m);
-                                    setEditing(null);
-                                  }}
-                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                  title="Reply"
-                                >
-                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <polyline points="9 17 4 12 9 7" />
-                                    <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-                                  </svg>
-                                </button>
-                              )}
-                              {!mine && (
-                                <button
-                                  onClick={() => {
-                                    setReportFor(m);
-                                    setReportReason("");
-                                  }}
-                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                  title="Report"
-                                >
-                                  <FlagIcon size={13} />
-                                </button>
-                              )}
-                              {mine && user?.role === "admin" && m.editedAt && (
-                                <button
-                                  onClick={() => void openHistory(m)}
-                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                  title="Edit history"
-                                >
-                                  🕘
-                                </button>
-                              )}
-                              <button
-                                onClick={() => setActionFor(showActions ? null : m.id)}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="More"
-                              >
-                                <DotsIcon size={13} />
-                              </button>
-                            </div>
-
                             {showActions && (
                               <div
                                 className={`flex flex-wrap items-center gap-1.5 text-[11px] animate-in fade-in duration-150 ${
@@ -2000,14 +2177,11 @@ export default function Chat() {
                               </div>
                             )}
 
-                            {/* Delivered / read tick on the last own message */}
-                            {mine && last && room && (
+                            {/* Read status on the last own message */}
+                            {mine && last && room && peerReadUntil >= m.id && (
                               <div className="flex items-center gap-1 self-end mt-0.5 pr-1 text-[10px] leading-none">
-                                <span
-                                  className={peerReadUntil >= m.id ? "text-gray-300" : "text-gray-500"}
-                                  title={peerReadUntil >= m.id ? `Read by ${room.peer}` : "Delivered"}
-                                >
-                                  {peerReadUntil >= m.id ? "✓✓" : "✓"}
+                                <span className="text-gray-400" title={`Read by ${room.peer}`}>
+                                  Read
                                 </span>
                               </div>
                             )}
@@ -2232,8 +2406,9 @@ export default function Chat() {
           </div>
 
           <div className="p-5 flex flex-col items-center text-center">
-            <Avatar name={room.peer} avatar={peerProfile?.avatar} size={76} />
-            <div className="mt-3 text-base font-semibold break-all">@{room.peer}</div>
+            <Avatar name={room.peer} avatar={peerProfile?.avatar} size={76} />                            <div className="mt-3 text-base font-semibold break-all">
+                              {displayLabel(room.peer, peerProfile?.displayName)}
+                            </div>
             <div className="flex items-center gap-1.5 text-xs mt-1">
               <span
                 className={`inline-block h-2 w-2 rounded-full ${

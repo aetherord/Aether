@@ -40,6 +40,7 @@ export async function GET(req: Request) {
         id: user.id,
         email: user.email,
         username: user.username,
+        displayName: user.displayName,
         role: user.role,
         avatar: user.avatar,
         timezone: user.timezone,

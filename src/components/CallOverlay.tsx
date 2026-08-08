@@ -204,13 +204,20 @@ export default function CallOverlay({
     };
   }, [api, end]);
 
-  /** Play the custom Aether ringtone while the call is still ringing. */
+  /**
+   * Play the custom Aether ringtone while the call is ringing: for the callee
+   * in the "ringing" state, and for the caller while they wait for an answer
+   * ("connecting" before the call becomes active).
+   */
   useEffect(() => {
-    if (state !== "ringing") return;
+    const ringing =
+      state === "ringing" ||
+      (direction === "outgoing" && state === "connecting" && startedAt == null);
+    if (!ringing) return;
     if (!ringtoneEnabled()) return;
     const stop = playRingtone();
     return () => stop();
-  }, [state]);
+  }, [state, direction, startedAt]);
 
   /**
    * Poll loop: caller waits for the answer; both sides exchange ICE
@@ -340,17 +347,7 @@ export default function CallOverlay({
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className="w-full max-w-sm rounded-2xl glass-strong border border-white/15 overflow-hidden shadow-2xl shadow-black/60 animate-pop">
-        {/* Title bar */}
-        <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
-          <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
-          <span className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
-          <span className="ml-2 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-            {direction === "outgoing" ? "Outgoing call" : "Incoming call"}
-          </span>
-        </div>
-
+      <div className="w-full max-w-sm rounded-2xl bg-[#141519] border border-white/10 overflow-hidden shadow-2xl shadow-black/60 animate-pop">
         {/* Remote video (screen share) */}
         <div className="px-4">
           <video

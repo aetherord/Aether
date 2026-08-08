@@ -27,6 +27,8 @@ export interface UserRow {
   id: number;
   email: string;
   username: string;
+  /** Optional display name shown instead of @username when set. */
+  displayName: string | null;
   passwordHash: string;
   dob: string | null;
   agreedTos: boolean;
@@ -113,6 +115,7 @@ export interface MessageRow {
 export interface NewUserInput {
   email: string;
   username: string;
+  displayName?: string | null;
   passwordHash: string;
   dob: string | null;
   agreedTos: boolean;
@@ -203,6 +206,8 @@ export interface AuthStore {
   /** Stores the client's E2E public key + timezone for a user. */
   setProfileKeys(userId: number, pubkey: string | null, timezone: string | null): Promise<void>;
   setAvatar(userId: number, avatar: string | null): Promise<void>;
+  /** Sets the user's display name (null clears it — falls back to @username). */
+  setDisplayName(userId: number, displayName: string | null): Promise<void>;
   setStatus(userId: number, status: string): Promise<void>;
   /** Heartbeat: records when the user last had the app open (real presence). */
   setLastSeen(userId: number): Promise<void>;
@@ -210,6 +215,7 @@ export interface AuthStore {
   changeUsername(userId: number, newUsername: string): Promise<boolean>;
   getProfileByUsername(username: string): Promise<{
     username: string;
+    displayName: string | null;
     avatar: string | null;
     timezone: string | null;
     status: string;
@@ -570,7 +576,7 @@ const SCHEMA_STATEMENTS = SCHEMA_SQL.split(";")
   .map((s) => `${s};`); // exec() requires statements to end with a semicolon
 
 const USER_COLUMNS =
-  "id, email, username, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, role, muted_until, banned_until, ban_reason, message_privacy, pubkey, timezone, avatar, status, last_seen_at, created_at";
+  "id, email, username, display_name, password_hash, dob, agreed_tos, agreed_privacy, agreed_rules, verified, totp_secret, totp_enabled, role, muted_until, banned_until, ban_reason, message_privacy, pubkey, timezone, avatar, status, last_seen_at, created_at";
 
 const MESSAGE_COLUMNS =
   "id, sender_id, sender_username, recipient_username, content, media_ref, media_mime, reply_to, edited_at, created_at";
@@ -578,6 +584,7 @@ const MESSAGE_COLUMNS =
 /** Columns added after the initial release; migrated in on existing databases. */
 const USER_MIGRATIONS: Record<string, string> = {
   username: "TEXT",
+  display_name: "TEXT",
   password_hash: "TEXT",
   dob: "TEXT",
   agreed_tos: "INTEGER NOT NULL DEFAULT 0",
@@ -703,6 +710,7 @@ class D1AuthStore implements AuthStore {
       id: Number(row.id),
       email: String(row.email),
       username: String(row.username ?? ""),
+      displayName: row.display_name == null ? null : String(row.display_name),
       passwordHash: String(row.password_hash ?? ""),
       dob: row.dob == null ? null : String(row.dob),
       agreedTos: Number(row.agreed_tos ?? 0) === 1,
@@ -1421,6 +1429,10 @@ class D1AuthStore implements AuthStore {
     await this.db.prepare("UPDATE users SET avatar = ?1 WHERE id = ?2").bind(avatar, userId).run();
   }
 
+  async setDisplayName(userId: number, displayName: string | null): Promise<void> {
+    await this.db.prepare("UPDATE users SET display_name = ?1 WHERE id = ?2").bind(displayName, userId).run();
+  }
+
   async setStatus(userId: number, status: string): Promise<void> {
     await this.db.prepare("UPDATE users SET status = ?1 WHERE id = ?2").bind(status, userId).run();
   }
@@ -1473,6 +1485,7 @@ class D1AuthStore implements AuthStore {
 
   async getProfileByUsername(username: string): Promise<{
     username: string;
+    displayName: string | null;
     avatar: string | null;
     timezone: string | null;
     status: string;
@@ -1480,12 +1493,13 @@ class D1AuthStore implements AuthStore {
     createdAt: number;
   } | null> {
     const row = await this.db
-      .prepare("SELECT username, avatar, timezone, status, last_seen_at, created_at FROM users WHERE username = ?1 LIMIT 1")
+      .prepare("SELECT username, display_name, avatar, timezone, status, last_seen_at, created_at FROM users WHERE username = ?1 LIMIT 1")
       .bind(username)
       .first();
     if (!row) return null;
     return {
       username: String(row.username),
+      displayName: row.display_name == null ? null : String(row.display_name),
       avatar: row.avatar == null ? null : String(row.avatar),
       timezone: row.timezone == null ? null : String(row.timezone),
       status: row.status == null ? "online" : String(row.status),
@@ -1979,6 +1993,7 @@ class MemoryAuthStore implements AuthStore {
       id: this.nextUserId++,
       email: input.email,
       username: input.username,
+      displayName: input.displayName ?? null,
       passwordHash: input.passwordHash,
       dob: input.dob,
       agreedTos: input.agreedTos,
@@ -2464,6 +2479,11 @@ class MemoryAuthStore implements AuthStore {
     if (user) user.avatar = avatar;
   }
 
+  async setDisplayName(userId: number, displayName: string | null): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (user) user.displayName = displayName;
+  }
+
   async setStatus(userId: number, status: string): Promise<void> {
     const user = this.usersById.get(userId);
     if (user) user.status = status;
@@ -2511,6 +2531,7 @@ class MemoryAuthStore implements AuthStore {
 
   async getProfileByUsername(username: string): Promise<{
     username: string;
+    displayName: string | null;
     avatar: string | null;
     timezone: string | null;
     status: string;
@@ -2521,6 +2542,7 @@ class MemoryAuthStore implements AuthStore {
     if (!user) return null;
     return {
       username: user.username,
+      displayName: user.displayName ?? null,
       avatar: user.avatar,
       timezone: user.timezone,
       status: user.status ?? "online",
