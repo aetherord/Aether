@@ -12,6 +12,9 @@ interface CloudflareEnv {
   TURNSTILE_SECRET_KEY?: string;
   TURSO_URL?: string;
   TURSO_AUTH_TOKEN?: string;
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
+  AI?: unknown;
 }
 
 declare namespace NodeJS {
@@ -24,6 +27,8 @@ declare namespace NodeJS {
     NEXT_PUBLIC_TURNSTILE_SITE_KEY?: string;
     TURSO_URL?: string;
     TURSO_AUTH_TOKEN?: string;
+    TURN_KEY_ID?: string;
+    TURN_KEY_API_TOKEN?: string;
     MEDIA_ROOT?: string;
     MEDIA_MAX_GB?: string;
     MEDIA_PURGE_AFTER_SYNC?: string;

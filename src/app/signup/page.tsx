@@ -4,6 +4,7 @@ import Link from "next/link";
 import Turnstile from "@/components/Turnstile";
 import Background from "@/components/Background";
 import { safeJson } from "@/lib/safeJson";
+import { isReservedUsername } from "@/lib/usernames";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -104,6 +105,10 @@ export default function Signup() {
     agreedRules;
 
   const signup = async () => {
+    if (isReservedUsername(username.trim())) {
+      setError("That username is not allowed — company and brand names can't be used");
+      return;
+    }
     setError(null);
     setLoading(true);
     try {
@@ -287,6 +292,7 @@ export default function Signup() {
                 maxLength={20}
                 className={inputClass}
               />
+              <p className="-mt-2 text-[11px] text-gray-600">Letters, numbers, underscores — no company or brand names.</p>
               <input
                 type="password"
                 placeholder="Password (8+ characters)"

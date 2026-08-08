@@ -166,9 +166,11 @@ async function ensureSchema() {
 }
 
 async function fetchPending() {
+  // Quarantined media (flagged for admin review) is NEVER written to the D:
+  // drive — it only exists in the admin panel until reviewed.
   const data = await turso([
     {
-      sql: "SELECT id, sender_username, recipient_username, filename, size, b64, created_at FROM media_queue WHERE synced = 0 AND sender_username != '_avatars' ORDER BY created_at ASC",
+      sql: "SELECT id, sender_username, recipient_username, filename, size, b64, created_at FROM media_queue WHERE synced = 0 AND quarantined = 0 AND sender_username != '_avatars' ORDER BY created_at ASC",
       args: [],
     },
   ]);

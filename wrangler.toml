@@ -12,6 +12,17 @@ binding = "ASSETS"
 binding = "WORKER_SELF_REFERENCE"
 service = "aether"
 
+# Public Turnstile site key — exposed to the client by design; read server-side
+# by verifyTurnstile() so enforcement activates only when both keys are present.
+[vars]
+NEXT_PUBLIC_TURNSTILE_SITE_KEY = "0x4AAAAAAEJsMbR9tqD7cn3k"
+
+# Workers AI binding for automated NSFW screening of uploaded images
+# (classifyImage in src/lib/nsfw.ts). Optional: without it, uploads are
+# never scanned and the feature degrades to report-only.
+[[ai]]
+binding = "AI"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "aether-messages"

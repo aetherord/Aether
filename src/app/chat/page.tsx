@@ -3,17 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import VideoPlayer from "@/components/VideoPlayer";
+import MediaBubble from "@/components/MediaBubble";
 import ImageViewer from "@/components/ImageViewer";
 import EmojiPicker from "@/components/EmojiPicker";
+import CallOverlay from "@/components/CallOverlay";
 import Background from "@/components/Background";
 import {
-  ArchiveIcon,
   ChatIcon,
   CheckIcon,
   DotsIcon,
   FlagIcon,
-  HomeIcon,
   PaperclipIcon,
   PlusIcon,
   SearchIcon,
@@ -28,6 +27,12 @@ import {
 } from "@/lib/e2e";
 import { containsExtremeSlur, SLUR_BLOCK_MESSAGE } from "@/lib/contentFilter";
 import { safeJson } from "@/lib/safeJson";
+import { formatText, plainText } from "@/lib/formatText";
+import { playChime, playRingtone, primeAudio, ringtoneEnabled } from "@/lib/audio";
+import { setupPushSubscription } from "@/lib/pushClient";
+
+/** A user is "really online" when their last heartbeat is < 2 minutes old. */
+const ONLINE_WINDOW_MS = 2 * 60 * 1000;
 
 interface Reaction {
   emoji: string;
@@ -58,6 +63,8 @@ interface Conversation {
   mediaMime: string | null;
   lastAt: number;
   lastSender: string;
+  myLastReadId?: number | null;
+  unread?: number;
 }
 
 interface FriendItem {
@@ -94,6 +101,15 @@ function dayLabel(ms: number): string {
   return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 
+function lastSeenText(ms: number | null | undefined): string | null {
+  if (ms == null) return null;
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
 // Monochrome avatar gradients — dark slate through black so the white
 // letter keeps contrast. Black & white only.
 const GRADIENTS = [
@@ -124,48 +140,6 @@ const STATUS_META: Record<string, { label: string; dot: string }> = {
 };
 const STATUS_OPTIONS = Object.keys(STATUS_META);
 
-let audioCtx: AudioContext | null = null;
-
-/** Creates/resumes the audio context. Called on user gestures so it's ready. */
-function primeAudio() {
-  try {
-    if (typeof AudioContext === "undefined") return;
-    if (!audioCtx) audioCtx = new AudioContext();
-    if (audioCtx.state === "suspended") void audioCtx.resume();
-  } catch {
-    /* audio unavailable */
-  }
-}
-
-/**
- * A soft, synthesized three-note chime (Web Audio — no audio file needed).
- * Sine arpeggio kept quiet so it never startles or disturbs the room.
- */
-function playChime() {
-  try {
-    if (typeof AudioContext === "undefined") return;
-    if (!audioCtx) audioCtx = new AudioContext();
-    if (audioCtx.state === "suspended") void audioCtx.resume();
-    const ctx = audioCtx;
-    const now = ctx.currentTime;
-    [523.25, 659.25, 783.99].forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      const t = now + i * 0.18;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.1, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.8);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + 1);
-    });
-  } catch {
-    /* audio unavailable */
-  }
-}
 
 const isVideo = (mime: string | null) => (mime ?? "").startsWith("video/");
 const isImage = (mime: string | null) => (mime ?? "").startsWith("image/");
@@ -245,9 +219,11 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [connected, setConnected] = useState(true);
-  const [live, setLive] = useState(false);
   const [scrollLocked, setScrollLocked] = useState(true);
   const [brokenMedia, setBrokenMedia] = useState<Set<string>>(new Set());
+  const [flaggedMedia, setFlaggedMedia] = useState<Set<string>>(new Set());
+  const [typers, setTypers] = useState<string[]>([]);
+  const [peerReadUntil, setPeerReadUntil] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
@@ -263,6 +239,18 @@ export default function Chat() {
   const [friendBusy, setFriendBusy] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const statusMenuRef = useRef<HTMLDivElement | null>(null);
+  // Right-side profile panel + media gallery for the open conversation.
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
+  // "Ignore" = hide the conversation + silence its notifications (local).
+  const [ignored, setIgnored] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("aether_ignored") ?? "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const [requestSentTo, setRequestSentTo] = useState<string | null>(null);
 
   // Replies / edits / reactions
   const [replyTo, setReplyTo] = useState<Message | null>(null);
@@ -272,6 +260,17 @@ export default function Chat() {
   const [historyFor, setHistoryFor] = useState<Message | null>(null);
   const [historyItems, setHistoryItems] = useState<{ content: string; editedAt: number }[]>([]);
 
+  // Voice calls (WebRTC, D1-relayed signaling)
+  const [call, setCall] = useState<{
+    direction: "outgoing" | "incoming";
+    peer: string;
+    callId?: string | null;
+  } | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{ callId: string; caller: string } | null>(null);
+  // Mirrors of call state for the poller (avoids stale-closure re-prompts).
+  const callActiveRef = useRef(false);
+  const incomingCallRef = useRef<string | null>(null);
+
   // Pending file previews before sending
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -279,14 +278,32 @@ export default function Chat() {
   // E2E
   const [e2eKeys, setE2eKeys] = useState<E2EKeyPair | null>(null);
   const [peerPub, setPeerPub] = useState<string | null>(null);
-  const [peerProfile, setPeerProfile] = useState<{ username: string; avatar: string | null; timezone: string | null; status: string; createdAt: number } | null>(null);
+  const [peerProfile, setPeerProfile] = useState<{
+    username: string;
+    avatar: string | null;
+    timezone: string | null;
+    status: string;
+    lastSeenAt: number | null;
+    createdAt: number;
+    isOnline?: boolean;
+    isFriend?: boolean | null;
+    isBlocked?: boolean;
+  } | null>(null);
   const [decryptedMap, setDecryptedMap] = useState<Record<number, string>>({});
   const [clock, setClock] = useState<Date>(new Date());
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Throttle typing pings + read receipts so the D1 writes stay minimal.
+  const typingSentAtRef = useRef(0);
+  const lastReportedReadRef = useRef(0);
   const loadingOlder = useRef<{ room: string; active: boolean }>({ room: "", active: false });
   const e2eReady = useRef(false);
+  // Mirror of `ignored` so the stream effect's closure never goes stale.
+  const ignoredRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    ignoredRef.current = ignored;
+  }, [ignored]);
   // Messages older than this were already on screen when the room opened —
   // never notify for them (kills the reconnect/replay notification flood).
   const roomOpenedAtRef = useRef(0);
@@ -391,22 +408,34 @@ export default function Chat() {
       return;
     }
     let alive = true;
+    const load = async () => {
+      const [profileRes, keyRes] = await Promise.all([
+        fetch(`/api/users/profile?username=${encodeURIComponent(room!.peer)}`),
+        fetch(`/api/keys/pubkey?username=${encodeURIComponent(room!.peer)}`),
+      ]);
+      if (!alive) return;
+      if (profileRes.ok) {
+        const d = await safeJson<{ profile?: {
+          username: string; avatar: string | null; timezone: string | null; status: string;
+          lastSeenAt: number | null; createdAt: number; isOnline?: boolean; isFriend?: boolean | null; isBlocked?: boolean;
+        } }>(profileRes);
+        if (alive && d?.profile) setPeerProfile(d.profile);
+      }
+      if (keyRes.ok) {
+        const d = await safeJson<{ pubkey?: string | null }>(keyRes);
+        if (alive) setPeerPub(d?.pubkey ?? null);
+      }
+    };
     setPeerProfile(null);
     setPeerPub(null);
-    fetch(`/api/users/profile?username=${encodeURIComponent(room.peer)}`)
-      .then((r) => (r.ok ? safeJson<{ profile?: { username: string; avatar: string | null; timezone: string | null; status: string; createdAt: number } }>(r) : Promise.resolve(null)))
-      .then((d) => {
-        if (alive && d?.profile) setPeerProfile(d.profile);
-      })
-      .catch(() => {});
-    fetch(`/api/keys/pubkey?username=${encodeURIComponent(room.peer)}`)
-      .then((r) => (r.ok ? safeJson<{ pubkey?: string | null }>(r) : Promise.resolve(null)))
-      .then((d) => {
-        if (alive) setPeerPub(d?.pubkey ?? null);
-      })
-      .catch(() => {});
+    setRequestSentTo(null);
+    setProfileOpen(false);
+    void load();
+    // Refresh every 30s so presence + timezone stay live without a WebSocket.
+    const t = setInterval(() => void load(), 30_000);
     return () => {
       alive = false;
+      clearInterval(t);
     };
   }, [room]);
 
@@ -465,6 +494,42 @@ export default function Chat() {
     return () => clearInterval(t);
   }, [checking, loadFriends]);
 
+  /* ── real presence: heartbeat while the app is open ────────────────── */
+  useEffect(() => {
+    if (checking || !user) return;
+    const beat = () => {
+      void fetch("/api/users/presence", { method: "POST" }).catch(() => {});
+    };
+    beat();
+    const t = setInterval(beat, 30_000);
+    const onVis = () => {
+      if (!document.hidden) {
+        beat();
+        void loadFriends();
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [checking, user, loadFriends]);
+
+  /* ── Web Push: register once notifications are granted ────────────── */
+  useEffect(() => {
+    if (checking || !user) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    void setupPushSubscription();
+  }, [checking, user]);
+
+  /* ── ring the incoming-call prompt ─────────────────────────────────── */
+  useEffect(() => {
+    if (!incomingCall) return;
+    if (!ringtoneEnabled()) return;
+    const stop = playRingtone();
+    return () => stop();
+  }, [incomingCall]);
+
   const loadMessages = useCallback(
     async (before: number | null = null, append = false) => {
       try {
@@ -510,6 +575,9 @@ export default function Chat() {
     setMessages([]);
     setHasMore(false);
     setBrokenMedia(new Set());
+    setFlaggedMedia(new Set());
+    setTypers([]);
+    setPeerReadUntil(0);
     setDecryptedMap({});
     // Anything older than this was here before we opened the room.
     roomOpenedAtRef.current = Date.now();
@@ -533,12 +601,18 @@ export default function Chat() {
     const maybeNotify = (m: Message) => {
       try {
         if (m.senderUsername === user?.username) return;
+        // Ignored peers are silenced — no sound, no popup.
+        if (room && ignoredRef.current.has(room.peer)) return;
         // Skip old/replayed messages (initial catch-up, reconnect replays) so
         // opening a room or a flaky connection never floods notifications.
         if (m.createdAt < roomOpenedAtRef.current) return;
         const perm =
           typeof Notification === "undefined" ? "unsupported" : Notification.permission;
-        const inBackground = typeof document !== "undefined" && document.hidden;
+        // Background = hidden tab OR the window simply isn't focused. Notify in
+        // both cases — you shouldn't miss a message because the tab is visible
+        // but you're in another window.
+        const inBackground =
+          typeof document !== "undefined" && (document.hidden || !document.hasFocus());
         // Respect an explicit "denied" — no sound, no popup.
         if (inBackground && perm !== "denied") playChime();
         if (perm === "unsupported") return;
@@ -549,7 +623,9 @@ export default function Chat() {
           });
         } else if (perm === "default" && !localStorage.getItem("aether_notif_asked")) {
           localStorage.setItem("aether_notif_asked", "1");
-          void Notification.requestPermission();
+          void Notification.requestPermission().then((p) => {
+            if (p === "granted") void setupPushSubscription();
+          });
         }
       } catch {
         /* notifications unavailable */
@@ -568,7 +644,6 @@ export default function Chat() {
         es.onopen = () => {
           if (stopped) return;
           esFailures = 0;
-          setLive(true);
           setConnected(true);
           stopPolling();
         };
@@ -598,7 +673,6 @@ export default function Chat() {
         };
         es.onerror = () => {
           if (stopped) return;
-          setLive(false);
           setConnected(false);
           startPolling();
           // Give up on EventSource after repeated failures (edge 429s, proxies
@@ -655,6 +729,89 @@ export default function Chat() {
     }
   }, [hasMore, messages, loadMessages, room]);
 
+  /* ── typing indicators + read receipts ─────────────────────────────── */
+  const notifyTyping = () => {
+    if (!room || !draft.trim()) return;
+    const now = Date.now();
+    if (now - typingSentAtRef.current < 2500) return;
+    typingSentAtRef.current = now;
+    void fetch("/api/chat/typing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room: "dm", peer: room.peer, typing: true }),
+    }).catch(() => {});
+  };
+
+  const stopTyping = () => {
+    if (!room) return;
+    typingSentAtRef.current = 0;
+    void fetch("/api/chat/typing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room: "dm", peer: room.peer, typing: false }),
+    }).catch(() => {});
+  };
+
+  // Leaving a room: clear our typing flag for that thread.
+  useEffect(() => {
+    return () => {
+      stopTyping();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room]);
+
+  // Report the highest incoming message id I've seen (throttled to one write
+  // per new batch — the server upserts, so this is cheap).
+  useEffect(() => {
+    if (!room || !user) return;
+    const maxIncoming = messages
+      .filter((m) => m.senderUsername !== user.username)
+      .reduce((mx, m) => Math.max(mx, m.id), 0);
+    if (maxIncoming > 0 && maxIncoming !== lastReportedReadRef.current) {
+      lastReportedReadRef.current = maxIncoming;
+      void fetch("/api/chat/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: "dm", peer: room.peer, messageId: maxIncoming }),
+      }).catch(() => {});
+    }
+  }, [messages, room, user]);
+
+  // Poll the peer's typing state + read receipts while a room is open.
+  useEffect(() => {
+    if (!room || !user) return;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const [typingRes, readRes] = await Promise.all([
+          fetch("/api/chat/typing?room=dm"),
+          fetch("/api/chat/read?room=dm"),
+        ]);
+        if (!alive) return;
+        if (typingRes.ok) {
+          const td = await safeJson<{ typers?: string[] }>(typingRes);
+          if (alive) setTypers((td?.typers ?? []).filter((t) => t !== user.username));
+        }
+        if (readRes.ok) {
+          const rd = await safeJson<{ receipts?: { username: string; userId: number; messageId: number }[] }>(readRes);
+          if (alive) {
+            const mine = (rd?.receipts ?? []).find((r) => r.username === room.peer);
+            setPeerReadUntil(mine?.messageId ?? 0);
+          }
+        }
+      } catch {
+        /* transient */
+      }
+    };
+    poll();
+    const t = setInterval(poll, 3000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room, user?.username]);
+
   /* ── send (text, with E2E) ─────────────────────────────────────────── */
   const sendText = async () => {
     const plain = draft.trim();
@@ -686,6 +843,7 @@ export default function Chat() {
         setDecryptedMap((prev) => ({ ...prev, [data.message!.id]: plain }));
       }
       setDraft("");
+      stopTyping();
       setReplyTo(null);
       // Append the server-confirmed message directly — no refetch round-trip.
       if (data.message) {
@@ -712,8 +870,14 @@ export default function Chat() {
       form.append("file", file);
       if (room) form.append("recipient", room.peer);
       const up = await fetch("/api/media/upload", { method: "POST", body: form });
-      const upData = await safeJson<{ error?: string; mediaRef?: string; mime?: string }>(up);
+      const upData = await safeJson<{ error?: string; mediaRef?: string; mime?: string; flagged?: boolean }>(up);
       if (!up.ok) throw new Error(upData.error || "Upload failed");
+      // Auto-flagged media stays hidden behind a placeholder — the sender sees
+      // it is under review instead of a broken image.
+      if (upData.flagged && upData.mediaRef) {
+        setFlaggedMedia((prev) => new Set(prev).add(upData.mediaRef!));
+      }
+      stopTyping();
       const res = await fetch("/api/chat/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -775,8 +939,8 @@ export default function Chat() {
     setPendingFiles((prev) => [...prev, ...list.slice(0, 5 - prev.length)]);
   };
 
-  /* ── local search over decrypted content ───────────────────────────── */
-  const runSearch = (q: string) => {
+  /* ── search: decrypted local content + server-side across the thread ─ */
+  const runSearch = async (q: string) => {
     const query = q.trim().toLowerCase();
     if (!query) {
       setSearchResults(null);
@@ -786,11 +950,28 @@ export default function Chat() {
       setSearchResults([]);
       return;
     }
-    const results = messages.filter((m) => {
-      const text = decryptedMap[m.id] ?? m.content;
-      return text.toLowerCase().includes(query);
+    const local = messages.filter((m) => {
+      const text = (decryptedMap[m.id] ?? m.content).toLowerCase();
+      return text.includes(query);
     });
-    setSearchResults(results);
+    // Server search reaches messages we haven't loaded yet (plaintext ones —
+    // E2E ciphertext is unreadable server-side, which is the point).
+    let server: Message[] = [];
+    try {
+      const params = new URLSearchParams({ q: q.trim() });
+      params.set("room", "dm");
+      params.set("peer", room.peer);
+      const res = await fetch(`/api/chat/search?${params.toString()}`);
+      if (res.ok) {
+        const d = await safeJson<{ messages?: Message[] }>(res);
+        server = d?.messages ?? [];
+      }
+    } catch {
+      /* offline — local results only */
+    }
+    const byId = new Map<number, Message>();
+    for (const m of [...server, ...local]) byId.set(m.id, m);
+    setSearchResults([...byId.values()].sort((a, b) => a.createdAt - b.createdAt));
   };
 
   /* ── actions: reply / edit / react / report / block ────────────────── */
@@ -980,6 +1161,82 @@ export default function Chat() {
     }
   };
 
+  /* ── profile-panel actions ────────────────────────────────────────── */
+  const toggleIgnore = (username: string) => {
+    setIgnored((prev) => {
+      const next = new Set(prev);
+      if (next.has(username)) next.delete(username);
+      else next.add(username);
+      try {
+        localStorage.setItem("aether_ignored", JSON.stringify([...next]));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+    // Ignoring the active conversation closes it.
+    if (room?.peer === username) {
+      const willIgnore = !ignored.has(username);
+      if (willIgnore) {
+        setRoom(null);
+        setProfileOpen(false);
+      }
+    }
+  };
+
+  const unfriendPeer = async () => {
+    if (!room) return;
+    setError(null);
+    try {
+      await fetch(`/api/friends?username=${encodeURIComponent(room.peer)}`, { method: "DELETE" });
+      await loadFriends();
+      setPeerProfile((p) => (p ? { ...p, isFriend: false } : p));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const sendRequestToPeer = async () => {
+    if (!room) return;
+    setError(null);
+    try {
+      const res = await fetch("/api/friends", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: room.peer }),
+      });
+      const data = await safeJson<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || "Failed to send request");
+      setRequestSentTo(room.peer);
+      await loadFriends();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to send request");
+    }
+  };
+
+
+  const toggleBlockPeer = async () => {
+    if (!room) return;
+    const blocked = Boolean(peerProfile?.isBlocked);
+    setError(null);
+    try {
+      const res = await fetch("/api/moderation/block", {
+        method: blocked ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: room.peer }),
+      });
+      const data = await safeJson<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || "Failed");
+      setPeerProfile((p) => (p ? { ...p, isBlocked: !blocked } : p));
+      if (!blocked) {
+        // Blocking hides their messages from view immediately.
+        setMessages((prev) => prev.filter((m) => m.senderUsername !== room.peer));
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed");
+    }
+  };
+
   const adminDelete = async (messageId: number) => {
     setError(null);
     try {
@@ -996,6 +1253,52 @@ export default function Chat() {
       setError(err instanceof Error ? err.message : "Failed to delete");
     }
   };
+
+  /* ── voice calls ──────────────────────────────────────────────────── */
+  const startCall = (peer: string) => {
+    if (call || incomingCall) return;
+    setCall({ direction: "outgoing", peer, callId: null });
+  };
+
+  // Keep refs in sync so the poller never re-prompts while a call is up.
+  useEffect(() => {
+    callActiveRef.current = call != null;
+  }, [call]);
+  useEffect(() => {
+    incomingCallRef.current = incomingCall?.callId ?? null;
+  }, [incomingCall]);
+
+  // Poll for incoming calls while logged in (every ~4s). Ringing calls aimed
+  // at me surface as an "incoming call" prompt.
+  useEffect(() => {
+    if (!user) return;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/calls?poll=1");
+        if (!res.ok) return;
+        const data = await safeJson<{ calls?: { id: string; caller: string; callee: string; state: string }[] }>(res);
+        if (!alive) return;
+        for (const c of data.calls ?? []) {
+          if (c.callee === user.username && c.state === "ringing") {
+            if (!callActiveRef.current && !incomingCallRef.current) {
+              setIncomingCall({ callId: c.id, caller: c.caller });
+            }
+            break;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    poll();
+    const t = setInterval(poll, 4000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.username]);
 
   /* ── derived ───────────────────────────────────────────────────────── */
   const grouped = useMemo(() => {
@@ -1023,7 +1326,20 @@ export default function Chat() {
 
   const roomTitle = room ? room.peer : "Messages";
   const e2eActive = Boolean(room && e2eKeys && peerPub);
-  const mediaSrcs = useMemo(() => messages.filter((m) => m.mediaRef && isImage(m.mediaMime)).map((m) => `/api/media/${m.mediaRef}`), [messages]);
+  // Only working images go into the lightbox — flagged/gone media is excluded.
+  const mediaSrcs = useMemo(
+    () =>
+      messages
+        .filter(
+          (m) =>
+            m.mediaRef &&
+            isImage(m.mediaMime) &&
+            !flaggedMedia.has(m.mediaRef) &&
+            !brokenMedia.has(m.mediaRef)
+        )
+        .map((m) => `/api/media/${m.mediaRef}`),
+    [messages, flaggedMedia, brokenMedia]
+  );
 
   const peerTime = useMemo(() => {
     if (!peerProfile?.timezone) return null;
@@ -1039,6 +1355,49 @@ export default function Chat() {
     }
   }, [peerProfile, clock]);
 
+  const peerTzName = useMemo(() => {
+    if (!peerProfile?.timezone) return null;
+    try {
+      const part = new Intl.DateTimeFormat([], {
+        timeZone: peerProfile.timezone,
+        timeZoneName: "longOffset",
+      })
+        .formatToParts(clock)
+        .find((p) => p.type === "timeZoneName");
+      return part?.value ?? peerProfile.timezone;
+    } catch {
+      return peerProfile.timezone;
+    }
+  }, [peerProfile, clock]);
+
+  // Real presence: online only when their heartbeat is fresh.
+  const peerOnline = peerProfile?.isOnline ?? false;
+  const peerLastSeen = lastSeenText(peerProfile?.lastSeenAt);
+  const peerPresenceText = peerOnline
+    ? "Online now"
+    : peerLastSeen
+      ? `Last seen ${peerLastSeen}`
+      : STATUS_META[peerProfile?.status ?? "offline"].label;
+
+  // Media grouped by day, for the in-chat gallery.
+  const mediaGroups = useMemo(() => {
+    const groups: { day: string; items: Message[] }[] = [];
+    for (const m of messages) {
+      if (!m.mediaRef) continue;
+      if (flaggedMedia.has(m.mediaRef) || brokenMedia.has(m.mediaRef)) continue;
+      const day = dayLabel(m.createdAt);
+      const last = groups[groups.length - 1];
+      if (last && last.day === day) last.items.push(m);
+      else groups.push({ day, items: [m] });
+    }
+    return groups;
+  }, [messages, flaggedMedia, brokenMedia]);
+
+  const openAdmin = () => {
+    const w = window.open("/admin", "aether-moderation", "width=1180,height=780,popup=yes");
+    if (!w) router.push("/admin"); // popup blocked — fall back to this tab
+  };
+
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center text-white relative">
@@ -1052,7 +1411,7 @@ export default function Chat() {
     <div className="h-dvh text-white flex overflow-hidden relative">
       <Background />
       {/* ══ Sidebar ══ */}
-      <aside className="w-64 shrink-0 border-r border-white/10 flex flex-col bg-[#050506]/75 backdrop-blur-xl">
+      <aside className="w-48 sm:w-64 shrink-0 border-r border-white/10 flex flex-col bg-[#050506]/75 backdrop-blur-xl">
         <div className="p-4 pb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-full bg-black border border-white/30 flex items-center justify-center text-base font-serif italic font-bold text-white shadow-lg shadow-black/50">
@@ -1060,32 +1419,37 @@ export default function Chat() {
             </div>
             <span className="text-sm font-semibold">Aether</span>
           </div>
-          <Link href="/" className="text-gray-500 hover:text-white transition-colors p-1 rounded" title="Home">
-            <HomeIcon size={16} />
-          </Link>
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => setFriendModal(true)}
+              title="Add a friend"
+              className="text-gray-500 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+            >
+              <PlusIcon size={15} />
+            </button>
+            <button
+              onClick={() => {
+                setSearchOpen((v) => !v);
+                setSearchResults(null);
+              }}
+              title="Search messages"
+              className={`p-1.5 rounded-lg transition-colors ${
+                searchOpen ? "text-white bg-white/10" : "text-gray-500 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <SearchIcon size={15} />
+            </button>
+          </div>
         </div>
 
-        <button
-          onClick={() => {
-            setSearchOpen((v) => !v);
-            setSearchResults(null);
-          }}
-          className={`mx-2 mt-1 px-3 py-2 rounded-xl text-left text-sm flex items-center gap-2.5 transition ${
-            searchOpen ? "bg-white/10 text-white" : "text-gray-400 hover:bg-white/5 hover:text-white"
-          }`}
-        >
-          <SearchIcon size={15} />
-          <span className="font-medium">Search</span>
-        </button>
-
         {searchOpen && (
-          <div className="mx-2 mt-2 px-1">
+          <div className="mx-3 mb-2">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
-                runSearch(e.target.value);
+                void runSearch(e.target.value);
               }}
               placeholder="Search this conversation…"
               autoFocus
@@ -1094,85 +1458,37 @@ export default function Chat() {
           </div>
         )}
 
-        <div className="mt-4 px-4 pb-1 flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-600">Friends</span>
-          <button onClick={() => setFriendModal(true)} title="Add a friend" className="text-gray-500 hover:text-white transition-colors leading-none">
-            <PlusIcon size={14} />
+        {/* Friend requests — a small banner instead of a full friends list */}
+        {incoming.length > 0 && (
+          <button
+            onClick={() => setFriendModal(true)}
+            className="mx-3 mb-2 px-3 py-2 rounded-xl text-left text-xs bg-white/5 border border-white/15 hover:bg-white/10 transition flex items-center gap-2"
+          >
+            <span className="flex -space-x-1.5">
+              {incoming.slice(0, 3).map((r) => (
+                <Avatar key={r.username} name={r.username} avatar={r.avatar} size={18} />
+              ))}
+            </span>
+            <span className="text-white/80 font-medium">
+              {incoming.length} friend request{incoming.length === 1 ? "" : "s"}
+            </span>
+            <span className="ml-auto text-gray-500">View</span>
           </button>
-        </div>
-        <div className="overflow-y-auto pb-1 max-h-52 shrink-0">
-          {friends.length === 0 && outgoing.length === 0 && incoming.length === 0 && (
-            <p className="px-4 py-1.5 text-xs text-gray-600">No friends yet — add someone to DM them.</p>
+        )}
+
+        <div className="mt-1 px-4 pb-1 flex items-center justify-between">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-600">Direct messages</span>
+          {conversations.length > 0 && (
+            <span className="text-[10px] text-gray-700">{conversations.length}</span>
           )}
-
-          {/* Incoming requests */}
-          {incoming.map((r) => (
-            <div key={r.username} className="mx-2 mb-1 flex items-center gap-2 rounded-lg bg-white/5 border border-white/15 px-2 py-1.5">
-              <Avatar name={r.username} avatar={r.avatar} size={22} />
-              <span className="text-xs font-medium text-white/80 truncate min-w-0 flex-1">{r.username} wants to chat</span>
-              <button onClick={() => void respondFriend(r.username, true)} title="Accept" className="text-white hover:text-gray-200 transition p-0.5">
-                <CheckIcon size={13} />
-              </button>
-              <button onClick={() => void respondFriend(r.username, false)} title="Decline" className="text-gray-400 hover:text-gray-200 transition p-0.5">
-                <XIcon size={13} />
-              </button>
-            </div>
-          ))}
-
-          {/* Friends */}
-          {friends.map((f) => {
-            const active = room?.kind === "dm" && room.peer === f.username;
-            return (
-              <button
-                key={f.id}
-                onClick={() => {
-                  setRoom({ kind: "dm", peer: f.username });
-                  setSearchOpen(false);
-                  setSearchResults(null);
-                  setReplyTo(null);
-                  setEditing(null);
-                }}
-                className={`w-full px-4 py-1.5 flex items-center gap-3 text-left transition ${
-                  active ? "bg-white/10" : "hover:bg-white/5"
-                }`}
-                title={`DM ${f.username} — right-click to unfriend`}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  void removeFriend(f.username);
-                }}
-              >
-                <Avatar name={f.username} avatar={f.avatar} size={24} />
-                <span className="text-xs font-medium truncate">{f.username}</span>
-                <span
-                  className={`ml-auto h-1.5 w-1.5 rounded-full ${STATUS_META[f.status ?? "offline"].dot}`}
-                  title={STATUS_META[f.status ?? "offline"].label}
-                />
-              </button>
-            );
-          })}
-
-          {/* Outgoing requests — cancellable */}
-          {outgoing.map((r) => (
-            <div key={r.username} className="px-4 py-1 flex items-center gap-2 text-[11px] text-gray-600">
-              <Avatar name={r.username} avatar={r.avatar} size={18} />
-              <span className="truncate flex-1">→ {r.username} (pending)</span>
-              <button
-                onClick={() => void cancelRequest(r.username)}
-                title="Cancel request"
-                className="text-gray-500 hover:text-white transition"
-              >
-                <XIcon size={12} />
-              </button>
-            </div>
-          ))}
         </div>
-
-        <div className="mt-3 px-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-600">Direct messages</div>
         <div className="flex-1 overflow-y-auto pb-2">
-          {conversations.length === 0 && (
-            <p className="px-4 py-2 text-xs text-gray-600">No DMs yet — add a friend and say hi.</p>
+          {conversations.filter((c) => !ignored.has(c.peer)).length === 0 && (
+            <p className="px-4 py-2 text-xs text-gray-600">
+              {conversations.length > 0 ? "No visible conversations — ignored ones are hidden." : "No DMs yet — add a friend and say hi."}
+            </p>
           )}
-          {conversations.map((c) => {
+          {conversations.filter((c) => !ignored.has(c.peer)).map((c) => {
             const active = room?.kind === "dm" && room.peer === c.peer;
             return (
               <button
@@ -1190,7 +1506,18 @@ export default function Chat() {
               >
                 <Avatar name={c.peer} size={28} />
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-medium truncate">{c.peer}</div>
+                  <div
+                    className={`truncate flex items-center gap-1.5 ${
+                      (c.unread ?? 0) > 0 ? "text-xs font-semibold text-white" : "text-xs font-medium text-gray-300"
+                    }`}
+                  >
+                    <span className="truncate">{c.peer}</span>
+                    {(c.unread ?? 0) > 0 && (
+                      <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-black text-[10px] font-bold flex items-center justify-center">
+                        {c.unread! > 99 ? "99+" : c.unread}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2 min-w-0">
                     {c.mediaRef && isImage(c.mediaMime) && (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -1204,14 +1531,18 @@ export default function Chat() {
                         }}
                       />
                     )}
-                    <div className="text-[11px] text-gray-500 truncate min-w-0">
+                    <div
+                      className={`text-[11px] truncate min-w-0 ${
+                        (c.unread ?? 0) > 0 ? "text-gray-200" : "text-gray-500"
+                      }`}
+                    >
                       {c.lastSender === user?.username ? "You: " : ""}
                       {c.mediaRef ? (
                         <span className="inline-flex items-center gap-1">
                           <PaperclipIcon size={11} /> Media
                         </span>
                       ) : (
-                        c.content || ""
+                        plainText(c.content || "")
                       )}
                     </div>
                   </div>
@@ -1258,9 +1589,13 @@ export default function Chat() {
             </div>
           </div>
           {user?.role === "admin" && (
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-white bg-white/10 border border-white/20 rounded-full px-1.5 py-0.5">
+            <button
+              onClick={openAdmin}
+              title="Open the moderation console"
+              className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-white bg-white/10 border border-white/20 rounded-full px-1.5 py-0.5 hover:bg-white/25 transition"
+            >
               Admin
-            </span>
+            </button>
           )}
           <Link href="/settings" className="text-gray-500 hover:text-white transition-colors p-1 rounded" title="Settings">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1277,37 +1612,92 @@ export default function Chat() {
         {room && (
           <>
             {/* Header */}
-            <header className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#050506]/60 backdrop-blur-xl z-10">
-              <div className="flex items-center gap-3 min-w-0">
+            <header className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 bg-[#050506]/60 backdrop-blur-xl z-10">
+              <button
+                onClick={() => setProfileOpen((v) => !v)}
+                className="flex items-center gap-3 min-w-0 text-left group"
+                title="View profile"
+              >
                 <Avatar name={room.peer} avatar={peerProfile?.avatar} size={36} />
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm font-semibold leading-tight truncate">{roomTitle}</div>
-                    {e2eActive && (
-                      <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium text-white bg-white/10 border border-white/20 rounded-full px-1.5 py-0.5" title="End-to-end encrypted">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                        </svg>
-                        E2E
-                      </span>
-                    )}
+                  <div className="text-sm font-semibold leading-tight truncate flex items-center gap-2 group-hover:text-white/80 transition-colors">
+                    <span className="truncate">{roomTitle}</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs">
-                    <span className={`inline-block h-2 w-2 rounded-full ${connected ? "bg-white pulse-dot" : "bg-gray-500"}`} />
-                    <span className={connected ? "text-white/70" : "text-gray-400"}>
-                      {connected ? (live ? "Live" : "Connected") : "Reconnecting…"}
+                  {/* Real presence — under their name */}
+                  <div className="flex items-center gap-1.5 text-xs mt-0.5">
+                    <span
+                      className={`inline-block h-2 w-2 rounded-full shrink-0 ${
+                        peerOnline ? "bg-white pulse-dot" : "bg-gray-600"
+                      }`}
+                    />
+                    <span className={peerOnline ? "text-white/80" : "text-gray-400"}>
+                      {peerPresenceText}
                     </span>
-                    {peerTime && (
-                      <span className="text-gray-500 font-mono ml-2">Their time — {peerTime}</span>
-                    )}
+                    {!connected && <span className="text-gray-500">· reconnecting…</span>}
                   </div>
+                  {/* Their time — fixed, with the real timezone */}
+                  {peerTime && peerProfile?.timezone && (
+                    <div
+                      className="text-[10px] text-gray-500 font-mono mt-0.5 truncate"
+                      title={`${peerProfile.timezone}${peerTzName ? ` (${peerTzName})` : ""}`}
+                    >
+                      Their time · {peerTime}
+                      {peerTzName ? ` · ${peerTzName}` : ""}
+                    </div>
+                  )}
+                  {typers.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs text-gray-300 mt-1">
+                      <span className="flex items-center gap-0.5">
+                        {[0, 1, 2].map((i) => (
+                          <span key={i} className="typing-dot" style={{ animationDelay: `${i * 0.15}s` }} />
+                        ))}
+                      </span>
+                      <span className="truncate">
+                        {typers.join(", ")} {typers.length === 1 ? "is" : "are"} typing…
+                      </span>
+                    </div>
+                  )}
                 </div>
+              </button>
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <button
+                  onClick={() => setMediaOpen(true)}
+                  title="Media"
+                  className={`shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full transition flex items-center justify-center ${
+                    mediaOpen ? "bg-white/20 text-white" : "bg-white/10 hover:bg-white/20 text-white/80"
+                  }`}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="m21 15-5-5L5 21" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setProfileOpen((v) => !v)}
+                  title="Profile"
+                  className={`shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full transition flex items-center justify-center ${
+                    profileOpen ? "bg-white/20 text-white" : "bg-white/10 hover:bg-white/20 text-white/80"
+                  }`}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => startCall(room.peer)}
+                  disabled={!!call || !!incomingCall}
+                  title={`Voice call ${room.peer}`}
+                  className="shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition flex items-center justify-center disabled:opacity-40"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                  </svg>
+                </button>
               </div>
-              <span className="hidden sm:inline-flex items-center gap-1.5 text-sm text-gray-300">
-                <span className={`h-2 w-2 rounded-full ${STATUS_META[peerProfile?.status ?? "offline"].dot}`} />
-                {STATUS_META[peerProfile?.status ?? "offline"].label}
-              </span>
             </header>
 
             {room && !e2eActive && e2eKeys && (
@@ -1350,7 +1740,15 @@ export default function Chat() {
                           {" · "}
                           {dayLabel(m.createdAt)} {timeLabel(m.createdAt)}
                         </div>
-                        <div className="text-sm text-gray-200">{decryptedMap[m.id] ?? (m.content || (m.mediaRef ? "📎 Media" : ""))}</div>
+                        <div className="text-sm text-gray-200">
+                          {m.mediaRef && !m.content ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <PaperclipIcon size={12} /> Media
+                            </span>
+                          ) : (
+                            formatText(decryptedMap[m.id] ?? m.content)
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1422,7 +1820,7 @@ export default function Chat() {
                               >
                                 <span className="font-medium text-gray-300">{m.replyTo.senderUsername}</span>
                                 <span className="ml-1.5 truncate block max-w-[24ch] sm:max-w-[36ch]">
-                                  {m.replyTo.mediaRef ? "📎 Media" : m.replyTo.content}
+                                  {m.replyTo.mediaRef ? "📎 Media" : plainText(m.replyTo.content)}
                                 </span>
                               </div>
                             )}
@@ -1437,37 +1835,22 @@ export default function Chat() {
                                     : "bg-white/8 border border-white/10 text-gray-100 rounded-2xl rounded-bl-md"
                               }`}
                             >
-                              {m.mediaRef && brokenMedia.has(m.mediaRef) ? (
-                                <div className="flex items-center gap-2 rounded-lg border border-dashed border-white/15 bg-black/20 px-3 py-2 text-xs text-gray-400 -mx-1 my-1">
-                                  <ArchiveIcon size={14} />
-                                  <span>Archived to the local media drive</span>
-                                </div>
-                              ) : m.mediaRef ? (
-                                isVideo(m.mediaMime) ? (
-                                  <VideoPlayer
-                                    src={`/api/media/${m.mediaRef}`}
-                                    className="-mx-1 my-1 max-w-[26rem]"
-                                    onError={() => setBrokenMedia((prev) => new Set(prev).add(m.mediaRef!))}
-                                  />
-                                ) : (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={`/api/media/${m.mediaRef}`}
-                                    alt={`Media from ${m.senderUsername}`}
-                                    loading="lazy"
-                                    onClick={() => {
-                                      const idx = mediaSrcs.indexOf(`/api/media/${m.mediaRef}`);
-                                      setLightbox({ srcs: mediaSrcs, index: Math.max(0, idx) });
-                                    }}
-                                    onError={() => setBrokenMedia((prev) => new Set(prev).add(m.mediaRef!))}
-                                    className={`max-w-full max-h-80 rounded-xl -mx-1 my-1 object-contain cursor-zoom-in`}
-                                  />
-                                )
+                              {m.mediaRef ? (
+                                <MediaBubble
+                                  mediaRef={m.mediaRef}
+                                  mime={m.mediaMime}
+                                  onFlagged={(ref) => setFlaggedMedia((prev) => new Set(prev).add(ref))}
+                                  onError={(ref) => setBrokenMedia((prev) => new Set(prev).add(ref))}
+                                  onOpen={(url, ref) => {
+                                    const idx = mediaSrcs.indexOf(`/api/media/${ref}`);
+                                    setLightbox({ srcs: mediaSrcs, index: Math.max(0, idx) });
+                                  }}
+                                />
                               ) : null}
 
                               {displayContent !== "" && displayContent != null ? (
-                                <p className={m.mediaRef ? "mt-1.5 inline-flex items-center gap-1.5" : "inline-flex items-center gap-1.5"}>
-                                  <span>{displayContent}</span>
+                                <p className={m.mediaRef ? "mt-1.5 flex items-start gap-1.5 flex-wrap" : "flex items-start gap-1.5 flex-wrap"}>
+                                  <span className="break-words whitespace-pre-wrap">{formatText(displayContent)}</span>
                                   {encrypted && (
                                     <span title="End-to-end encrypted" className={`shrink-0 ${mine ? "text-white/80" : "text-gray-500 dark:text-gray-400"}`}>
                                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1494,6 +1877,126 @@ export default function Chat() {
                                 </p>
                               ) : null}
                             </div>
+
+                            {/* Hover actions — inline under the bubble so they never overlap */}
+                            <div
+                              className={`flex items-center gap-1 text-[11px] transition-all duration-150 ${
+                                mine ? "justify-end" : "justify-start"
+                              } ${showActions ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                            >
+                              <button
+                                onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}
+                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                                title="React"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <circle cx="12" cy="12" r="10" />
+                                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                                  <line x1="9" x2="9.01" y1="9" y2="9" />
+                                  <line x1="15" x2="15.01" y1="9" y2="9" />
+                                </svg>
+                              </button>
+                              {mine ? (
+                                <button
+                                  onClick={() => {
+                                    setEditing(m);
+                                    setEditDraft(decryptedMap[m.id] ?? m.content);
+                                    setReplyTo(null);
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                                  title="Edit"
+                                >
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                                  </svg>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => {
+                                    setReplyTo(m);
+                                    setEditing(null);
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                                  title="Reply"
+                                >
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="9 17 4 12 9 7" />
+                                    <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                                  </svg>
+                                </button>
+                              )}
+                              {!mine && (
+                                <button
+                                  onClick={() => {
+                                    setReportFor(m);
+                                    setReportReason("");
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                                  title="Report"
+                                >
+                                  <FlagIcon size={13} />
+                                </button>
+                              )}
+                              {mine && user?.role === "admin" && m.editedAt && (
+                                <button
+                                  onClick={() => void openHistory(m)}
+                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                                  title="Edit history"
+                                >
+                                  🕘
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setActionFor(showActions ? null : m.id)}
+                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
+                                title="More"
+                              >
+                                <DotsIcon size={13} />
+                              </button>
+                            </div>
+
+                            {showActions && (
+                              <div
+                                className={`flex flex-wrap items-center gap-1.5 text-[11px] animate-in fade-in duration-150 ${
+                                  mine ? "justify-end" : "justify-start"
+                                }`}
+                              >
+                                {!mine && (
+                                  <button
+                                    onClick={() => void blockUser(m.senderUsername)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-white/10 border border-white/30 text-white hover:bg-white/20 transition"
+                                  >
+                                    Block @{m.senderUsername}
+                                  </button>
+                                )}
+                                {mine && user?.role === "admin" && (
+                                  <button
+                                    onClick={() => void adminDelete(m.id)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-red-600/20 border border-red-500/30 text-red-300 hover:bg-red-600/30 transition"
+                                  >
+                                    Delete (admin)
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => setActionFor(null)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-white/10 border border-white/10 text-gray-400 hover:text-white transition"
+                                >
+                                  Close
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Delivered / read tick on the last own message */}
+                            {mine && last && room && (
+                              <div className="flex items-center gap-1 self-end mt-0.5 pr-1 text-[10px] leading-none">
+                                <span
+                                  className={peerReadUntil >= m.id ? "text-gray-300" : "text-gray-500"}
+                                  title={peerReadUntil >= m.id ? `Read by ${room.peer}` : "Delivered"}
+                                >
+                                  {peerReadUntil >= m.id ? "✓✓" : "✓"}
+                                </span>
+                              </div>
+                            )}
 
                             {/* Reactions */}
                             {reactions.length > 0 && (
@@ -1528,123 +2031,6 @@ export default function Chat() {
                             )}
                           </div>
 
-                          {/* Hover actions */}
-                          {!mine && (
-                            <div
-                              className={`absolute -top-3 right-0 flex gap-1 text-[11px] transition-opacity ${
-                                showActions ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                              }`}
-                            >
-                              <button
-                                onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="React"
-                              >
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <circle cx="12" cy="12" r="10" />
-                                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                                  <line x1="9" x2="9.01" y1="9" y2="9" />
-                                  <line x1="15" x2="15.01" y1="9" y2="9" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setReplyTo(m);
-                                  setEditing(null);
-                                }}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="Reply"
-                              >
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <polyline points="9 17 4 12 9 7" />
-                                  <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setReportFor(m);
-                                  setReportReason("");
-                                }}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="Report"
-                              >
-                                <FlagIcon size={13} />
-                              </button>
-                              <button
-                                onClick={() => setActionFor(m.id)}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="More"
-                              >
-                                <DotsIcon size={13} />
-                              </button>
-                            </div>
-                          )}
-
-                          {mine && !showActions && (
-                            <div className="absolute -top-3 right-0 flex gap-1 text-[11px] opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="React"
-                              >
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <circle cx="12" cy="12" r="10" />
-                                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                                  <line x1="9" x2="9.01" y1="9" y2="9" />
-                                  <line x1="15" x2="15.01" y1="9" y2="9" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setEditing(m);
-                                  setEditDraft(decryptedMap[m.id] ?? m.content);
-                                  setReplyTo(null);
-                                }}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="Edit"
-                              >
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                                </svg>
-                              </button>
-                              {user?.role === "admin" && m.editedAt && (
-                                <button
-                                  onClick={() => void openHistory(m)}
-                                  className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                  title="Edit history"
-                                >
-                                  🕘
-                                </button>
-                              )}
-                              <button
-                                onClick={() => setActionFor(m.id)}
-                                className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 hover:bg-white/20 transition"
-                                title="More"
-                              >
-                                <DotsIcon size={13} />
-                              </button>
-                            </div>
-                          )}
-
-                          {/* Block affordance */}
-                          {showActions && !mine && (
-                            <div className="absolute -bottom-8 right-0 z-10 flex items-center gap-1 text-[11px] animate-in fade-in duration-150">
-                              <button
-                                onClick={() => void blockUser(m.senderUsername)}
-                                className="px-2.5 py-1.5 rounded-lg bg-white/10 border border-white/30 text-white hover:bg-white/20 transition"
-                              >
-                                Block @{m.senderUsername}
-                              </button>
-                            </div>
-                          )}
-                          {showActions && (
-                            <button
-                              onClick={() => setActionFor(null)}
-                              className="absolute -bottom-8 right-0 z-10 px-2 py-1 rounded-lg bg-white/10 border border-white/10 text-gray-400 hover:text-white transition text-[11px]"
-                            >
-                              Close
-                            </button>
-                          )}
                         </div>
                       );
                     })}
@@ -1686,7 +2072,7 @@ export default function Chat() {
                     </svg>
                     <span className="text-xs text-gray-400 truncate min-w-0">
                       Replying to <span className="text-gray-200 font-medium">{replyTo.senderUsername}</span>:{" "}
-                      {replyTo.mediaRef ? "📎 Media" : (decryptedMap[replyTo.id] ?? replyTo.content)}
+                      {replyTo.mediaRef ? "📎 Media" : plainText(decryptedMap[replyTo.id] ?? replyTo.content)}
                     </span>
                     <button
                       onClick={() => setReplyTo(null)}
@@ -1723,7 +2109,7 @@ export default function Chat() {
                   </div>
                 )}
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2 sm:gap-2.5">
                   <input
                     ref={fileRef}
                     type="file"
@@ -1739,31 +2125,25 @@ export default function Chat() {
                     onClick={() => fileRef.current?.click()}
                     disabled={uploading}
                     title="Send images or videos (or paste / drag & drop)"
-                    className="shrink-0 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition flex items-center justify-center disabled:opacity-40 disabled:active:scale-100"
+                    className="shrink-0 w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition flex items-center justify-center disabled:opacity-40 disabled:active:scale-100"
                   >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px] sm:h-5 sm:w-5">
                       <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                       <circle cx="8.5" cy="8.5" r="1.5" />
                       <path d="m21 15-5-5L5 21" />
                     </svg>
                   </button>
-                  <button
-                    onClick={() => setPickerFor(pickerFor === 0 ? null : 0)}
-                    className="shrink-0 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition flex items-center justify-center"
-                    title="Emoji & GIFs"
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                      <line x1="9" x2="9.01" y1="9" y2="9" />
-                      <line x1="15" x2="15.01" y1="9" y2="9" />
-                    </svg>
-                  </button>
-                  <div className="flex-1 relative">
+                  <div className="flex-1 relative min-w-0">
                     <input
                       type="text"
                       value={editing ? editDraft : draft}
-                      onChange={(e) => (editing ? setEditDraft(e.target.value) : setDraft(e.target.value))}
+                      onChange={(e) => {
+                        if (editing) setEditDraft(e.target.value);
+                        else {
+                          setDraft(e.target.value);
+                          notifyTyping();
+                        }
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           if (editing) void saveEdit();
@@ -1778,13 +2158,25 @@ export default function Chat() {
                         }
                       }}
                       placeholder={editing ? "Edit message…" : `Message ${room.peer}…`}
-                      className="w-full px-4 py-3 pr-12 bg-white/5 border border-white/10 rounded-full text-white placeholder-gray-500 focus:outline-none focus:border-white/60 focus:bg-white/8 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.12)] transition"
+                      className="w-full px-3.5 py-2.5 sm:px-4 sm:py-3 pr-10 sm:pr-12 bg-white/5 border border-white/10 rounded-full text-white placeholder-gray-500 focus:outline-none focus:border-white/60 focus:bg-white/8 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.12)] transition"
                       maxLength={4000}
                     />
                     {(sending || uploading) && (
                       <span className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full border-2 border-white/20 border-t-white animate-spin" />
                     )}
                   </div>
+                  <button
+                    onClick={() => setPickerFor(pickerFor === 0 ? null : 0)}
+                    className="shrink-0 w-10 h-10 sm:w-11 sm:h-11 ml-1 sm:ml-1.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition flex items-center justify-center"
+                    title="Emoji & GIFs"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px] sm:h-5 sm:w-5">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                      <line x1="9" x2="9.01" y1="9" y2="9" />
+                      <line x1="15" x2="15.01" y1="9" y2="9" />
+                    </svg>
+                  </button>
                   <button
                     onClick={() => (editing ? void saveEdit() : pendingFiles.length > 0 ? void sendPendingFiles() : void sendText())}
                     disabled={
@@ -1793,7 +2185,7 @@ export default function Chat() {
                       (!editing && !draft.trim() && pendingFiles.length === 0) ||
                       (editing ? !editDraft.trim() : false)
                     }
-                    className="shrink-0 px-5 sm:px-6 py-3 rounded-full bg-white text-black font-medium shadow-lg shadow-black/50 hover:brightness-110 active:scale-95 transition disabled:opacity-40 disabled:shadow-none disabled:active:scale-100"
+                    className="shrink-0 px-4 py-2.5 sm:px-6 sm:py-3 rounded-full bg-white text-black text-sm font-medium shadow-lg shadow-black/50 hover:brightness-110 active:scale-95 transition disabled:opacity-40 disabled:shadow-none disabled:active:scale-100"
                   >
                     {sending || uploading ? (
                       <span className="inline-flex items-center gap-2">
@@ -1811,6 +2203,124 @@ export default function Chat() {
         )}
       </div>
 
+      {/* ══ Right-side profile panel ══ */}
+      {room && profileOpen && (
+        <aside className="w-72 shrink-0 border-l border-white/10 flex flex-col bg-[#050506]/70 backdrop-blur-xl">
+          <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Profile</span>
+            <button
+              onClick={() => setProfileOpen(false)}
+              className="text-gray-500 hover:text-white transition p-1 rounded-lg hover:bg-white/5"
+              title="Close panel"
+            >
+              <XIcon size={15} />
+            </button>
+          </div>
+
+          <div className="p-5 flex flex-col items-center text-center">
+            <Avatar name={room.peer} avatar={peerProfile?.avatar} size={76} />
+            <div className="mt-3 text-base font-semibold break-all">@{room.peer}</div>
+            <div className="flex items-center gap-1.5 text-xs mt-1">
+              <span
+                className={`inline-block h-2 w-2 rounded-full ${
+                  peerOnline ? "bg-white pulse-dot" : "bg-gray-600"
+                }`}
+              />
+              <span className={peerOnline ? "text-white/80" : "text-gray-400"}>
+                {peerPresenceText}
+              </span>
+            </div>
+
+            {/* Their time — live, with the real timezone */}
+            {peerTime && peerProfile?.timezone && (
+              <div className="mt-3 rounded-xl bg-white/5 border border-white/10 px-4 py-2.5 w-full">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Their time</div>
+                <div className="font-mono text-sm text-white">
+                  {peerTime}
+                  <span className="text-gray-500 text-xs ml-2">{peerTzName ?? peerProfile.timezone}</span>
+                </div>
+              </div>
+            )}
+            <div className="mt-2 text-[11px] text-gray-600">Joined {dayLabel(peerProfile?.createdAt ?? 0)}</div>
+          </div>
+
+          <div className="px-4 pb-4 space-y-1.5">
+            <button
+              onClick={() => startCall(room.peer)}
+                disabled={!!call || !!incomingCall}
+                className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-sm font-medium transition flex items-center justify-center gap-2 disabled:opacity-40"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                </svg>
+                Voice call
+              </button>
+            <button
+              onClick={() => {
+                setMediaOpen(true);
+                setProfileOpen(false);
+              }}
+              className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-sm font-medium transition flex items-center justify-center gap-2"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <path d="m21 15-5-5L5 21" />
+              </svg>
+              View media
+            </button>
+
+            <div className="h-px bg-white/10 my-2" />
+
+            {peerProfile?.isFriend ? (
+              <button
+                onClick={() => void unfriendPeer()}
+                className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-sm text-gray-200 transition"
+              >
+                Remove friend
+              </button>
+            ) : requestSentTo === room.peer ? (
+              <div className="w-full py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-gray-400 text-center">
+                Friend request sent
+              </div>
+            ) : (
+              <button
+                onClick={() => void sendRequestToPeer()}
+                className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-sm text-gray-200 transition"
+              >
+                Add friend
+              </button>
+            )}
+            <button
+              onClick={() => toggleIgnore(room.peer)}
+              className={`w-full py-2.5 rounded-xl text-sm transition border ${
+                ignored.has(room.peer)
+                  ? "bg-white/10 border-white/25 text-white"
+                  : "bg-white/5 hover:bg-white/10 border-white/10 text-gray-200"
+              }`}
+            >
+              {ignored.has(room.peer) ? "Unignore" : "Ignore"}
+              <span className="block text-[10px] text-gray-500 font-normal mt-0.5">
+                {ignored.has(room.peer) ? "Notifications are on again" : "Hide conversation & silence notifications"}
+              </span>
+            </button>
+            <button
+              onClick={() => void toggleBlockPeer()}
+              className={`w-full py-2.5 rounded-xl text-sm transition border ${
+                peerProfile?.isBlocked
+                  ? "bg-white/10 border-white/25 text-white"
+                  : "bg-red-600/15 hover:bg-red-600/25 border-red-500/25 text-red-300"
+              }`}
+            >
+              {peerProfile?.isBlocked ? "Unblock" : "Block"}
+              <span className="block text-[10px] opacity-70 font-normal mt-0.5">
+                {peerProfile?.isBlocked ? "They can message you again" : "They can no longer message you"}
+              </span>
+            </button>
+          </div>
+        </aside>
+      )}
+
       {/* Emoji picker popover (composer) */}
       {room && pickerFor === 0 && (
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40" onClick={(e) => e.stopPropagation()}>
@@ -1824,35 +2334,99 @@ export default function Chat() {
         </div>
       )}
 
-      {/* Add friend modal */}
+      {/* Friends & requests modal */}
       {friendModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setFriendModal(false)}>
           <div className="w-full max-w-sm glass-strong rounded-2xl p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold mb-1">Add a friend</h2>
-            <p className="text-sm text-gray-400 mb-4">Enter their username — they&apos;ll get a request they can accept.</p>
-            <input
-              type="text"
-              value={friendName}
-              onChange={(e) => setFriendName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void addFriend();
-              }}
-              placeholder="username"
-              maxLength={20}
-              autoFocus
-              className="w-full px-3 py-2.5 bg-black/40 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition"
-            />
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => setFriendModal(false)} className="flex-1 py-2.5 rounded-full border border-white/15 text-sm text-gray-300 hover:bg-white/5 transition">
-                Cancel
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-lg font-semibold">Friends</h2>
+              <button onClick={() => setFriendModal(false)} className="text-gray-500 hover:text-white transition p-1" title="Close">
+                <XIcon size={16} />
               </button>
-              <button
-                onClick={() => void addFriend()}
-                disabled={friendBusy || !friendName.trim()}
-                className="flex-1 py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-gray-200 transition disabled:opacity-40"
-              >
-                {friendBusy ? "Sending…" : "Send request"}
-              </button>
+            </div>
+
+            {/* Incoming requests */}
+            {incoming.length > 0 && (
+              <div className="mt-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-600 mb-1.5">Incoming requests</div>
+                <div className="space-y-1.5">
+                  {incoming.map((r) => (
+                    <div key={r.username} className="flex items-center gap-2 rounded-xl bg-white/5 border border-white/15 px-2.5 py-2">
+                      <Avatar name={r.username} avatar={r.avatar} size={26} />
+                      <span className="text-sm font-medium text-white/90 truncate flex-1">{r.username}</span>
+                      <button
+                        onClick={() => void respondFriend(r.username, true)}
+                        title="Accept"
+                        className="w-7 h-7 rounded-full bg-white text-black flex items-center justify-center hover:bg-gray-200 transition"
+                      >
+                        <CheckIcon size={13} />
+                      </button>
+                      <button
+                        onClick={() => void respondFriend(r.username, false)}
+                        title="Decline"
+                        className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-gray-300 flex items-center justify-center transition"
+                      >
+                        <XIcon size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Outgoing requests */}
+            {outgoing.length > 0 && (
+              <div className="mt-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-600 mb-1.5">Sent requests</div>
+                <div className="space-y-1.5">
+                  {outgoing.map((r) => (
+                    <div key={r.username} className="flex items-center gap-2 rounded-xl bg-white/5 border border-white/10 px-2.5 py-2">
+                      <Avatar name={r.username} avatar={r.avatar} size={26} />
+                      <span className="text-sm text-gray-300 truncate flex-1">{r.username} · pending</span>
+                      <button
+                        onClick={() => void cancelRequest(r.username)}
+                        title="Cancel request"
+                        className="text-[11px] text-gray-500 hover:text-white transition px-2 py-1 rounded-lg hover:bg-white/10"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {friends.length > 0 && (
+              <p className="mt-3 text-[11px] text-gray-600">
+                You have {friends.length} friend{friends.length === 1 ? "" : "s"} — open a conversation from the sidebar.
+              </p>
+            )}
+
+            {/* Add form */}
+            <div className="mt-4">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-600 mb-1.5">Add a friend</div>
+              <p className="text-xs text-gray-500 mb-2">Enter their username — they&apos;ll get a request they can accept.</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={friendName}
+                  onChange={(e) => setFriendName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void addFriend();
+                  }}
+                  placeholder="username"
+                  maxLength={20}
+                  autoFocus
+                  className="flex-1 min-w-0 px-3 py-2.5 bg-black/40 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/30 transition"
+                />
+                <button
+                  onClick={() => void addFriend()}
+                  disabled={friendBusy || !friendName.trim()}
+                  className="shrink-0 px-4 py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-gray-200 transition disabled:opacity-40"
+                >
+                  {friendBusy ? "Sending…" : "Send"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1910,18 +2484,161 @@ export default function Chat() {
               {historyItems.map((h, i) => (
                 <div key={i} className="rounded-xl border border-white/10 bg-black/30 p-3">
                   <div className="text-[10px] text-gray-600 mb-1">{dayLabel(h.editedAt)} {timeLabel(h.editedAt)} — previous version</div>
-                  <p className="text-sm text-gray-200 break-words">{h.content.startsWith(E2E_PREFIX) ? "🔒 (encrypted)" : h.content}</p>
+                  <p className="text-sm text-gray-200 break-words">
+                    {h.content.startsWith(E2E_PREFIX) ? "🔒 (encrypted)" : formatText(h.content)}
+                  </p>
                 </div>
               ))}
               <div className="rounded-xl border border-white/20 bg-white/5 p-3">
                 <div className="text-[10px] text-gray-600 mb-1">Current version</div>
                 <p className="text-sm text-gray-100 break-words">
-                  {(decryptedMap[historyFor.id] ?? historyFor.content).startsWith(E2E_PREFIX) ? "🔒 (encrypted)" : (decryptedMap[historyFor.id] ?? historyFor.content)}
+                  {(decryptedMap[historyFor.id] ?? historyFor.content).startsWith(E2E_PREFIX)
+                    ? "🔒 (encrypted)"
+                    : formatText(decryptedMap[historyFor.id] ?? historyFor.content)}
                 </p>
               </div>
             </div>
           </div>
         </div>
+      )}
+
+      {/* ══ Media gallery — every photo/video, grouped by day ══ */}
+      {mediaOpen && room && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/90 backdrop-blur-sm flex flex-col animate-in fade-in duration-200"
+          onClick={() => setMediaOpen(false)}
+        >
+          <div
+            className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-white/10 bg-black/30"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <div className="text-sm font-semibold">Media</div>
+              <div className="text-xs text-gray-500">with {room.peer} · {mediaGroups.reduce((n, g) => n + g.items.length, 0)} item(s)</div>
+            </div>
+            <button
+              onClick={() => setMediaOpen(false)}
+              className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 transition flex items-center justify-center"
+              title="Close (Esc)"
+            >
+              <XIcon size={16} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
+            {mediaGroups.length === 0 && (
+              <p className="text-sm text-gray-500 text-center pt-16">No media in this conversation yet.</p>
+            )}
+            {mediaGroups.map((g) => (
+              <div key={g.day} className="mb-7">
+                <div className="sticky top-0 z-10 bg-black/70 backdrop-blur-md rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400 inline-block mb-3">
+                  {g.day}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+                  {g.items.map((m) => {
+                    const ref = m.mediaRef!;
+                    if (isVideo(m.mediaMime)) {
+                      return (
+                        <a
+                          key={m.id}
+                          href={`/api/media/${ref}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="group relative aspect-square overflow-hidden rounded-xl border border-white/10 bg-black/50 hover:border-white/30 transition"
+                          title="Open video"
+                        >
+                          <video src={`/api/media/${ref}`} muted preload="metadata" className="w-full h-full object-cover" />
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/10 transition">
+                            <span className="w-10 h-10 rounded-full bg-white/90 text-black flex items-center justify-center">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <polygon points="6 3 20 12 6 21 6 3" />
+                              </svg>
+                            </span>
+                          </span>
+                        </a>
+                      );
+                    }
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => {
+                          const idx = mediaSrcs.indexOf(`/api/media/${ref}`);
+                          setLightbox({ srcs: mediaSrcs, index: Math.max(0, idx) });
+                        }}
+                        className="group relative aspect-square overflow-hidden rounded-xl border border-white/10 bg-black/40 hover:border-white/30 transition cursor-zoom-in"
+                        title={dayLabel(m.createdAt)}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/media/${ref}`}
+                          alt="Shared media"
+                          loading="lazy"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Incoming call prompt */}
+      {incomingCall && user && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl glass-strong border border-white/15 p-6 animate-pop shadow-2xl shadow-black/60">
+            <div className="flex flex-col items-center">
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-900 border border-white/20 flex items-center justify-center text-3xl font-bold text-white animate-pulse-ring">
+                {incomingCall.caller.slice(0, 1).toUpperCase()}
+              </div>
+              <div className="mt-3 text-lg font-semibold">@{incomingCall.caller}</div>
+              <div className="text-xs text-gray-400 mt-1">is calling you…</div>
+              <div className="flex gap-4 mt-6">
+                <button
+                  onClick={() => {
+                    setCall({ direction: "incoming", peer: incomingCall.caller, callId: incomingCall.callId });
+                    setIncomingCall(null);
+                  }}
+                  className="w-14 h-14 rounded-full bg-green-600 hover:bg-green-500 text-white flex items-center justify-center transition active:scale-95 shadow-lg shadow-green-900/40"
+                  title="Answer"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => {
+                    void fetch("/api/calls", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ action: "hangup", callId: incomingCall.callId }),
+                    }).catch(() => {});
+                    setIncomingCall(null);
+                  }}
+                  className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center transition active:scale-95 shadow-lg shadow-red-900/40"
+                  title="Decline"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Active call overlay */}
+      {call && user && (
+        <CallOverlay
+          me={user.username}
+          peer={call.peer}
+          peerAvatar={call.peer === room?.peer ? peerProfile?.avatar : null}
+          direction={call.direction}
+          initialCallId={call.callId}
+          onEnded={() => setCall(null)}
+        />
       )}
 
       {/* Custom image viewer */}

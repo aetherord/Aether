@@ -172,6 +172,54 @@ body {
 	animation: pulse-dot 2.2s ease-in-out infinite;
 }
 
+@keyframes pop {
+	from {
+		opacity: 0;
+		transform: scale(0.92) translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1) translateY(0);
+	}
+}
+.animate-pop {
+	animation: pop 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+.typing-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+	0% {
+		box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.35);
+	}
+	70% {
+		box-shadow: 0 0 0 18px rgba(255, 255, 255, 0);
+	}
+	100% {
+		box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+	}
+}
+.animate-pulse-ring {
+	animation: pulse-ring 1.6s ease-out infinite;
+}
+
 /* Respect users who prefer reduced motion */
 @media (prefers-reduced-motion: reduce) {
 	*,

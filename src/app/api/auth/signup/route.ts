@@ -3,6 +3,7 @@ import {
   generateVerificationCode,
   hashPassword,
   isValidDob,
+  isReservedUsername,
   isValidEmail,
   isValidPassword,
   isValidUsername,
@@ -43,6 +44,9 @@ export async function POST(req: Request) {
     if (!isValidEmail(email)) return jsonError("Enter a valid email address", 400);
     if (!isValidUsername(username)) {
       return jsonError("Username must be 3–20 characters (letters, numbers, underscores)", 400);
+    }
+    if (isReservedUsername(username)) {
+      return jsonError("That username is not allowed — company and brand names can't be used", 400);
     }
     if (!isValidPassword(password)) {
       return jsonError("Password must be at least 8 characters", 400);

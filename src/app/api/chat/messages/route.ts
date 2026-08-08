@@ -8,6 +8,7 @@ import {
 import { getStore, type ChatRoom, type MessageRow } from "@/lib/store";
 import { containsExtremeSlur, SLUR_BLOCK_MESSAGE } from "@/lib/contentFilter";
 import { E2E_PREFIX } from "@/lib/e2e";
+import { pushPayload, sendPush } from "@/lib/push";
 
 const MAX_MESSAGE_LENGTH = 4000;
 const MESSAGE_RATE_WINDOW = 10 * 60 * 1000;
@@ -200,6 +201,25 @@ export async function POST(req: Request) {
       createdAt: Date.now(),
     });
     const [decorated] = await decorate(store, session.user.id, [message]);
+
+    // Fire-and-forget Web Push to the DM recipient — this is what delivers
+    // notifications when their chat window is closed. Best-effort: never
+    // block or fail the send because push hiccuped.
+    if (recipient) {
+      const peer = await store.getUserByUsername(recipient);
+      if (peer) {
+        const subs = await store.listPushSubscriptions(peer.id);
+        if (subs.length > 0) {
+          const plainPreview = content.startsWith(E2E_PREFIX)
+            ? "🔒 (encrypted)"
+            : content.slice(0, 120);
+          void sendPush(subs, pushPayload(session.user.username, plainPreview, Boolean(mediaRef)), (endpoint) =>
+            store.removePushSubscription(endpoint)
+          );
+        }
+      }
+    }
+
     return jsonOk({ message: decorated });
   } catch (err) {
     return handleApiError(err);

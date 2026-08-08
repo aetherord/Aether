@@ -49,6 +49,7 @@ export async function GET(req: Request) {
     const store = await getStore();
     const [target] = await store.getMessagesByIds([messageId]);
     if (!target) return jsonError("Message not found", 404);
+    // Only the sender or an admin may read it.
     if (target.senderId !== session.user.id && session.user.role !== "admin") {
       return jsonError("You cannot view this message's history", 403);
     }

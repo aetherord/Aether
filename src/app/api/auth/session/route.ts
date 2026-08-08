@@ -45,6 +45,8 @@ export async function GET(req: Request) {
         timezone: user.timezone,
         hasPubkey: Boolean(user.pubkey),
         status: user.status ?? "online",
+        bannedUntil: user.bannedUntil,
+        banReason: user.banReason,
       },
       twoFactorEnabled: user.totpEnabled,
       mutedUntil: user.mutedUntil,
@@ -67,7 +69,10 @@ export async function GET(req: Request) {
 
     return res;
   } catch (err) {
-    console.error("auth: session lookup failed");
+    console.error(
+      "auth: session lookup failed",
+      err instanceof Error ? (err.stack ?? err.message) : err
+    );
     return json({ authenticated: false }, 500);
   }
 }

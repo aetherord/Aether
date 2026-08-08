@@ -19,7 +19,20 @@ export default function ImageViewer({ srcs, index, onClose, onNavigate }: ImageV
   const [zoom, setZoom] = useState(1);
   const [drag, setDrag] = useState<{ x: number; y: number; sx: number; sy: number } | null>(null);
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [loaded, setLoaded] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Preload the neighbours so navigating never shows a blank flash.
+  useEffect(() => {
+    setLoaded(false);
+    for (const delta of [1, -1]) {
+      const url = srcs[(current + delta + srcs.length) % srcs.length];
+      if (url) {
+        const img = new Image();
+        img.src = url;
+      }
+    }
+  }, [current, srcs]);
 
   const go = useCallback(
     (delta: number) => {
@@ -134,9 +147,14 @@ export default function ImageViewer({ srcs, index, onClose, onNavigate }: ImageV
           src={srcs[current]}
           alt="Enlarged media"
           draggable={false}
-          className="max-w-full max-h-full select-none transition-transform duration-150"
+          onLoad={() => setLoaded(true)}
+          className={`max-w-full max-h-full select-none transition-opacity duration-300 ${
+            loaded ? "opacity-100" : "opacity-0"
+          }`}
           style={{
             transform: `translate(${pos.x}px, ${pos.y}px) scale(${zoom})`,
+            transitionProperty: "transform",
+            transitionDuration: "150ms",
             position: "absolute",
             inset: 0,
             margin: "auto",

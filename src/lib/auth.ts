@@ -45,6 +45,8 @@ export function isValidUsername(username: string): boolean {
   return /^[a-zA-Z0-9_]{3,20}$/.test(username);
 }
 
+export { isReservedUsername } from "./usernames";
+
 export function isValidPassword(password: string): boolean {
   return password.length >= 8 && password.length <= 128;
 }
@@ -230,6 +232,13 @@ export async function resolveSession(
   const user = await store.getUserById(row.userId);
   if (!user) return null;
 
+  // Defense in depth: a suspended account must never hold a live session,
+  // even if a race let one survive the ban (admin bans revoke sessions too).
+  if (user.bannedUntil && user.bannedUntil > Date.now()) {
+    await store.deleteSession(row.tokenHash);
+    return null;
+  }
+
   await store.touchSession(row.tokenHash);
   return { session: row, user };
 }
@@ -237,12 +246,16 @@ export async function resolveSession(
 /* ── Cloudflare Turnstile (bot protection, optional) ──────────────────────── */
 
 /**
- * Verifies a Turnstile token. When TURNSTILE_SECRET_KEY is not configured the
- * check is skipped so the flow still works in development.
+ * Verifies a Turnstile token. Enforced only when BOTH the secret key and the
+ * public site key are configured — if either is missing, the client widget
+ * wouldn't render a token anyway, so enforcing with only the secret would
+ * break every login/signup. This keeps dev and a partially-configured deploy
+ * working while turning on bot protection the moment both keys exist.
  */
 export async function verifyTurnstile(token: string | undefined): Promise<boolean> {
   const secret = getSecret("TURNSTILE_SECRET_KEY");
-  if (!secret) return true;
+  const siteKey = getSecret("NEXT_PUBLIC_TURNSTILE_SITE_KEY");
+  if (!secret || !siteKey) return true;
   if (!token) return false;
 
   const form = new URLSearchParams({ secret, response: token });

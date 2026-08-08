@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import Turnstile from "@/components/Turnstile";
 import Background from "@/components/Background";
 import { safeJson } from "@/lib/safeJson";
 
@@ -12,8 +13,14 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [remember, setRemember] = useState(true);
+  const [cfToken, setCfToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [suspended, setSuspended] = useState<{ until: number; reason: string } | null>(null);
+  const [appealText, setAppealText] = useState("");
+  const [appealSent, setAppealSent] = useState(false);
+  const [appealBusy, setAppealBusy] = useState(false);
+  const [appealError, setAppealError] = useState<string | null>(null);
 
   const login = async () => {
     if (!email || !password) return;
@@ -23,10 +30,16 @@ export default function Login() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, remember }),
+        body: JSON.stringify({ email, password, remember, turnstileToken: cfToken ?? undefined }),
       });
-      const data = await safeJson<{ error?: string; requires2FA?: boolean }>(res);
-      if (!res.ok) throw new Error(data.error || "Invalid credentials");
+      const data = await safeJson<{ error?: string; requires2FA?: boolean; code?: string; bannedUntil?: number; banReason?: string }>(res);
+      if (!res.ok) {
+        if (data.code === "banned") {
+          setSuspended({ until: data.bannedUntil ?? 0, reason: data.banReason ?? "No reason was provided." });
+          return;
+        }
+        throw new Error(data.error || "Invalid credentials");
+      }
       if (data.requires2FA) {
         setTotpCode("");
         setStep("totp");
@@ -37,6 +50,30 @@ export default function Login() {
       setError(err instanceof Error ? err.message : "Invalid credentials");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const submitAppeal = async () => {
+    if (!appealText.trim() || appealBusy) return;
+    setAppealBusy(true);
+    setAppealError(null);
+    try {
+      const res = await fetch("/api/moderation/appeal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account: email,
+          reason: appealText.trim(),
+          turnstileToken: cfToken ?? undefined,
+        }),
+      });
+      const data = await safeJson<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || "Failed to submit appeal");
+      setAppealSent(true);
+    } catch (err: unknown) {
+      setAppealError(err instanceof Error ? err.message : "Failed to submit appeal");
+    } finally {
+      setAppealBusy(false);
     }
   };
 
@@ -77,15 +114,72 @@ export default function Login() {
               A
             </div>
             <h1 className="text-2xl font-medium">
-              {step === "totp" ? "Two-factor authentication" : "Log in to Aether"}
+              {suspended ? "Account suspended" : step === "totp" ? "Two-factor authentication" : "Log in to Aether"}
             </h1>
             <p className="text-sm text-gray-400 mt-1">
-              {step === "credentials" && "Welcome back. Enter your details to continue."}
-              {step === "totp" && "Enter the 6-digit code from your authenticator app."}
+              {suspended && "This account can't sign in right now."}
+              {!suspended && step === "credentials" && "Welcome back. Enter your details to continue."}
+              {!suspended && step === "totp" && "Enter the 6-digit code from your authenticator app."}
             </p>
           </div>
 
-          {step === "credentials" && (
+          {suspended && (
+            <div className="space-y-4 animate-in fade-in duration-500">
+              <div className="flex items-center gap-2.5">
+                <span className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-lg" aria-hidden>
+                  🚫
+                </span>
+                <div>
+                  <div className="text-sm font-semibold">Your account is suspended</div>
+                  <div className="text-[11px] text-gray-400">
+                    {suspended.until > 0
+                      ? `Suspended until ${new Date(suspended.until).toLocaleString([], {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}`
+                      : "Suspended indefinitely"}
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/30 px-3.5 py-3 text-sm text-gray-300">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Reason</div>
+                {suspended.reason}
+              </div>
+
+              {appealSent ? (
+                <div className="rounded-xl border border-white/15 bg-white/5 px-3.5 py-3 text-sm text-gray-200">
+                  ✓ Your appeal has been submitted. An admin will review it — you&apos;ll be able to log in again if it&apos;s approved.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Appeal this suspension</div>
+                    <textarea
+                      value={appealText}
+                      onChange={(e) => setAppealText(e.target.value)}
+                      placeholder="Tell us what happened — you'll get a fair review."
+                      rows={4}
+                      maxLength={1000}
+                      className="w-full px-3.5 py-3 bg-black/30 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/50 transition resize-none"
+                    />
+                  </div>
+                  <Turnstile onToken={setCfToken} />
+                  {appealError && <p className="text-sm text-red-300">{appealError}</p>}
+                  <button
+                    onClick={() => void submitAppeal()}
+                    disabled={appealBusy || !appealText.trim()}
+                    className="btn-glow w-full py-3 rounded-full bg-white text-black text-sm font-medium hover:brightness-110 transition disabled:opacity-40 disabled:shadow-none"
+                  >
+                    {appealBusy ? "Submitting…" : "Submit appeal"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!suspended && step === "credentials" && (
             <div className="space-y-4">
               <input
                 type="text"
@@ -148,6 +242,8 @@ export default function Login() {
                 </span>
               </button>
 
+              <Turnstile onToken={setCfToken} />
+
               <button
                 onClick={login}
                 disabled={loading || !email || !password}
@@ -158,7 +254,7 @@ export default function Login() {
             </div>
           )}
 
-          {step === "totp" && (
+          {!suspended && step === "totp" && (
             <div className="space-y-4 animate-in fade-in duration-500">
               <input
                 type="text"

@@ -8,10 +8,10 @@ import type { NextRequest } from "next/server";
  * so it is a tripwire, not a full DDoS defense.
  */
 const BURST_WINDOW_MS = 60_000;
-// Generous per-IP ceiling: one page load + polling fires ~10 requests, and
-// several users can share a NAT IP. The app routes still enforce their own
-// per-user limits; this is only a volumetric tripwire.
-const BURST_MAX_PER_IP = 1_500;
+// ~10/sec per IP: one page load + polling fires ~10 requests, and several
+// users can share a NAT IP. The app routes still enforce their own per-user
+// limits; this is only a volumetric tripwire.
+const BURST_MAX_PER_IP = 600;
 const MAX_TRACKED_IPS = 10_000;
 
 const requestLog = new Map<string, number[]>();
@@ -65,7 +65,12 @@ export function middleware(request: NextRequest) {
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("X-XSS-Protection", "1; mode=block");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  response.headers.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  // Microphone/camera/display-capture allowed for voice calls + screen share
+  // (same-origin only); everything else stays locked down.
+  response.headers.set(
+    "Permissions-Policy",
+    "geolocation=(), microphone=(self), camera=(self), display-capture=(self), fullscreen=(self)"
+  );
   response.headers.set("Cross-Origin-Resource-Policy", "same-origin");
   response.headers.set(
     "Strict-Transport-Security",
@@ -87,7 +92,7 @@ export function middleware(request: NextRequest) {
       : "'self' 'unsafe-inline' https://challenges.cloudflare.com";
   response.headers.set(
     "Content-Security-Policy",
-    `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none';`
+    `upgrade-insecure-requests; default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none';`
   );
 
   return response;

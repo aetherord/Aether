@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ensureKeyPair } from "@/lib/e2e";
 import { safeJson } from "@/lib/safeJson";
+import { setupPushSubscription } from "@/lib/pushClient";
+import { ringtoneEnabled } from "@/lib/audio";
 import AvatarEditor from "@/components/AvatarEditor";
 import Background from "@/components/Background";
 
@@ -51,6 +53,8 @@ export default function Settings() {
   const [formMessage, setFormMessage] = useState<string | null>(null);
 
   const [notifStatus, setNotifStatus] = useState<NotificationPermission | "unsupported">("unsupported");
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [ringtoneOn, setRingtoneOn] = useState(ringtoneEnabled());
   const [avatarBusy, setAvatarBusy] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [editorFile, setEditorFile] = useState<File | null>(null);
@@ -318,6 +322,20 @@ export default function Settings() {
     if (typeof Notification === "undefined") return;
     const perm = await Notification.requestPermission();
     setNotifStatus(perm);
+    if (perm === "granted") {
+      const ok = await setupPushSubscription();
+      setPushEnabled(ok);
+    }
+  };
+
+  const toggleRingtone = () => {
+    const next = !ringtoneOn;
+    setRingtoneOn(next);
+    try {
+      localStorage.setItem("aether_ringtone", next ? "on" : "off");
+    } catch {
+      /* ignore */
+    }
   };
 
   const logout = async () => {
@@ -353,9 +371,7 @@ export default function Settings() {
           <Link href="/chat" className="text-sm text-gray-400 hover:text-white transition-colors">
             ← Back to chat
           </Link>
-          <Link href="/" className="text-sm text-gray-400 hover:text-white transition-colors">
-            Home
-          </Link>
+          <span className="text-sm text-gray-600">Settings</span>
         </div>
 
         <div className="flex flex-col md:flex-row gap-6">
@@ -659,8 +675,8 @@ export default function Settings() {
             {/* Notifications */}
             {tab === "notifications" && (
               <section className="glass rounded-2xl p-6">
-                <h2 className="font-semibold text-lg mb-1">Desktop notifications</h2>
-                <p className="text-sm text-gray-400 mb-5">Get a notification when someone messages you while the tab is in the background.</p>
+                <h2 className="font-semibold text-lg mb-1">Notifications</h2>
+                <p className="text-sm text-gray-400 mb-5">Get notified when someone messages you — even when the window is closed.</p>
                 <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/20 px-4 py-3.5">
                   <div>
                     <div className="text-sm font-medium">
@@ -675,6 +691,51 @@ export default function Settings() {
                       Enable
                     </button>
                   )}
+                </div>
+
+                {notifStatus === "granted" && (
+                  <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/20 px-4 py-3.5 mt-3">
+                    <div>
+                      <div className="text-sm font-medium">Push — when the window is closed</div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">
+                        {pushEnabled
+                          ? "Active — messages reach you even with the chat closed."
+                          : "Not subscribed yet — tap to activate."}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() =>
+                        void setupPushSubscription().then((ok) => setPushEnabled(ok))
+                      }
+                      className={`shrink-0 px-5 py-2.5 rounded-full text-sm font-medium transition ${
+                        pushEnabled ? "bg-white/10 text-gray-300" : "bg-white text-black hover:bg-gray-200"
+                      }`}
+                    >
+                      {pushEnabled ? "Active" : "Activate"}
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/20 px-4 py-3.5 mt-3">
+                  <div>
+                    <div className="text-sm font-medium">Call ringtone</div>
+                    <div className="text-[11px] text-gray-500 mt-0.5">A custom Aether ringtone plays on incoming calls.</div>
+                  </div>
+                  <button
+                    onClick={toggleRingtone}
+                    role="switch"
+                    aria-checked={ringtoneOn}
+                    className={`shrink-0 w-11 h-6 rounded-full transition relative ${
+                      ringtoneOn ? "bg-white" : "bg-white/15"
+                    }`}
+                    title={ringtoneOn ? "Ringtone on" : "Ringtone off"}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${
+                        ringtoneOn ? "left-[22px] bg-black" : "left-0.5 bg-gray-400"
+                      }`}
+                    />
+                  </button>
                 </div>
               </section>
             )}

@@ -6,7 +6,9 @@ import {
   rateLimitedError,
 } from "@/lib/http";
 import { getStore } from "@/lib/store";
-import { enqueueMedia, ensureMediaSchema, mediaConfigured } from "@/lib/media";
+import { enqueueMedia, ensureMediaSchema, mediaConfigured, setMediaQuarantined } from "@/lib/media";
+import { getAiBinding } from "@/lib/env";
+import { classifyImage } from "@/lib/nsfw";
 
 // Per-user upload throttle so a single account cannot fill the Turso queue.
 const UPLOAD_WINDOW_MS = 15 * 60 * 1000;
@@ -91,7 +93,35 @@ export async function POST(req: Request) {
       bytes,
     });
 
-    return jsonOk({ mediaRef, mime });
+    // Automated NSFW screening (Workers AI, image-only). A hard flag
+    // quarantines the media immediately — hidden from every non-admin and
+    // never written to the local drive — and queues it for the review panel.
+    // Best-effort: without the AI binding (or on any inference error) the
+    // upload goes through untouched, like before.
+    let flagged = false;
+    const ai = kind === "image" ? getAiBinding() : null;
+    if (ai) {
+      const verdict = await classifyImage(ai, bytes);
+      if (verdict.scanned && verdict.reason) {
+        try {
+          if (verdict.flagged) {
+            await setMediaQuarantined(mediaRef, true);
+            flagged = true;
+          }
+          await store.addMediaReview({
+            mediaRef,
+            mediaMime: mime,
+            senderUsername: session.user.username,
+            reason: verdict.reason,
+            reporterUsername: "auto-scan",
+          });
+        } catch {
+          /* media store or DB hiccup — the upload itself already succeeded */
+        }
+      }
+    }
+
+    return jsonOk({ mediaRef, mime, flagged });
   } catch (err) {
     return handleApiError(err);
   }

@@ -26,3 +26,18 @@ export function hasCloudflareContext(): boolean {
     (globalThis as Record<symbol, unknown>)[Symbol.for("__cloudflare-context__")]
   );
 }
+
+/**
+ * Returns the Workers AI binding (`env.AI`) when the Worker declares one in
+ * wrangler.toml — or null in plain `next dev` / accounts without Workers AI.
+ * The binding is optional: NSFW screening degrades gracefully without it.
+ */
+export function getAiBinding(): unknown {
+  try {
+    const ctx = getCloudflareContext({ async: false });
+    return (ctx.env as unknown as Record<string, unknown>).AI ?? null;
+  } catch {
+    // Not inside the Worker — no binding available.
+    return null;
+  }
+}

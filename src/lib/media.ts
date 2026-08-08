@@ -24,6 +24,8 @@ export interface MediaRecord {
   size: number;
   b64: string;
   createdAt: number;
+  /** 1 = quarantined (flagged for admin review, not served to normal users). */
+  quarantined: number;
 }
 
 /* ── Turso wire format (tagged values) ───────────────────────────────────── */
@@ -192,21 +194,35 @@ let schemaReady: Promise<void> | null = null;
 
 export function ensureMediaSchema(): Promise<void> {
   if (!schemaReady) {
-    schemaReady = tursoExec([
-      {
-        sql: `CREATE TABLE IF NOT EXISTS media_queue (
-          id TEXT PRIMARY KEY,
-          sender_username TEXT NOT NULL,
-          recipient_username TEXT,
-          filename TEXT NOT NULL,
-          mime TEXT NOT NULL,
-          size INTEGER NOT NULL,
-          b64 TEXT NOT NULL,
-          synced INTEGER NOT NULL DEFAULT 0,
-          created_at INTEGER NOT NULL
-        )`,
-      },
-    ]).catch((err) => {
+    schemaReady = (async () => {
+      await tursoExec([
+        {
+          sql: `CREATE TABLE IF NOT EXISTS media_queue (
+            id TEXT PRIMARY KEY,
+            sender_username TEXT NOT NULL,
+            recipient_username TEXT,
+            filename TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            b64 TEXT NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0,
+            quarantined INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+          )`,
+        },
+      ]);
+      // Best-effort: add the quarantined column to databases created before it
+      // existed. ALTER fails silently if the column is already there.
+      try {
+        await tursoExec([
+          {
+            sql: "ALTER TABLE media_queue ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0",
+          },
+        ]);
+      } catch {
+        /* column already exists */
+      }
+    })().catch((err) => {
       schemaReady = null;
       throw err;
     });
@@ -271,7 +287,7 @@ export async function mediaStats(): Promise<MediaStats> {
 export async function getMedia(id: string): Promise<MediaRecord | null> {
   await ensureMediaSchema();
   const rows = await tursoSelect(
-    "SELECT id, sender_username, recipient_username, filename, mime, size, b64, created_at FROM media_queue WHERE id = ?1 LIMIT 1",
+    "SELECT id, sender_username, recipient_username, filename, mime, size, b64, quarantined, created_at FROM media_queue WHERE id = ?1 LIMIT 1",
     [id]
   );
   const row = rows[0];
@@ -284,6 +300,44 @@ export async function getMedia(id: string): Promise<MediaRecord | null> {
     mime: String(row[4]),
     size: Number(row[5]),
     b64: String(row[6]),
-    createdAt: Number(row[7]),
+    quarantined: Number(row[7] ?? 0),
+    createdAt: Number(row[8]),
   };
+}
+
+/** Marks media as quarantined (1) or restores it (0) after admin review. */
+export async function setMediaQuarantined(id: string, quarantined: boolean): Promise<void> {
+  await ensureMediaSchema();
+  await tursoExec([
+    {
+      sql: "UPDATE media_queue SET quarantined = ?1 WHERE id = ?2",
+      args: [quarantined ? 1 : 0, id],
+    },
+  ]);
+}
+
+/** Permanently removes a media record (admin deletion). */
+export async function deleteMediaRecord(id: string): Promise<void> {
+  await ensureMediaSchema();
+  await tursoExec([{ sql: "DELETE FROM media_queue WHERE id = ?1", args: [id] }]);
+}
+
+/** Quarantined (pending-review) media records, newest first. */
+export async function listQuarantinedMedia(limit = 100): Promise<MediaRecord[]> {
+  await ensureMediaSchema();
+  const rows = await tursoSelect(
+    `SELECT id, sender_username, recipient_username, filename, mime, size, b64, quarantined, created_at
+     FROM media_queue WHERE quarantined = 1 ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`
+  );
+  return rows.map((row) => ({
+    id: String(row[0]),
+    senderUsername: String(row[1]),
+    recipientUsername: row[2] == null ? null : String(row[2]),
+    filename: String(row[3]),
+    mime: String(row[4]),
+    size: Number(row[5]),
+    b64: String(row[6]),
+    quarantined: Number(row[7] ?? 0),
+    createdAt: Number(row[8]),
+  }));
 }
